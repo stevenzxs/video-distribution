@@ -2,7 +2,13 @@ import pytest
 
 from api_client import APIClient, is_success_response
 from config import MATRIX_CONFIG
-from matrix_service import MatrixError, MatrixRuntimeState, MatrixScheduler, parse_matrix_command
+from matrix_service import (
+    MatrixError,
+    MatrixRuntimeState,
+    MatrixScheduler,
+    build_stream_descriptor,
+    parse_matrix_command,
+)
 
 
 class CapturingAPIClient(APIClient):
@@ -325,6 +331,24 @@ def test_parse_matrix_command():
 def test_parse_matrix_command_rejects_invalid_shape():
     with pytest.raises(MatrixError):
         parse_matrix_command("1x1")
+
+
+def test_stream_channel_appends_default_suffix_to_physical_mac():
+    stream = build_stream_descriptor({
+        "name": "输入1",
+        "mac": "00-40-01-2b-05-27",
+    })
+
+    assert stream["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
+
+
+def test_stream_channel_keeps_api_mac_with_embedded_channel():
+    stream = build_stream_descriptor({
+        "name": "输入1",
+        "mac": "6c-df-fb-01-5e-80-00-01",
+    })
+
+    assert stream["open_header"]["c"] == "6c-df-fb-01-5e-80-00-01/v3"
 
 
 def test_scheduler_opens_expected_output_window():

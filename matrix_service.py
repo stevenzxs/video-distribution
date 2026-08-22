@@ -162,11 +162,27 @@ class MatrixScheduler:
                 output,
                 parsed.output_index,
             )
+            logger.info(
+                "输入%d状态: name=%s, ip=%s, mac=%s, type=%s, status=%s, hdmi_status=%s",
+                parsed.input_index,
+                encoder.get("name"),
+                encoder.get("ip"),
+                encoder.get("mac"),
+                encoder.get("type"),
+                encoder.get("status"),
+                encoder.get("hdmi_status"),
+            )
             window = self._open_output_window(
                 client,
                 display_wall,
                 encoder["mac"],
                 parsed.output_index,
+            )
+            stream = build_stream_descriptor(encoder)
+            logger.info(
+                "输入%d网页取流通道: %s",
+                parsed.input_index,
+                stream["open_header"]["c"],
             )
 
             route = {
@@ -175,7 +191,7 @@ class MatrixScheduler:
                 "output": output,
                 "display_wall": display_wall,
                 "window": window,
-                "stream": build_stream_descriptor(encoder),
+                "stream": stream,
             }
             self.runtime_state.record(parsed.output_index, route)
             logger.info(
@@ -680,12 +696,16 @@ def _validate_resource_name(label: str, name: str) -> None:
 
 
 def _public_device(device: Dict[str, Any], index: int) -> Dict[str, Any]:
-    return {
+    public = {
         "index": index,
         "name": str(_first_value(device, NAME_KEYS) or f"设备{index}"),
         "ip": str(_first_value(device, IP_KEYS) or ""),
         "mac": str(_first_value(device, MAC_KEYS) or ""),
     }
+    for key in ("type", "status", "hdmi_status"):
+        if key in device:
+            public[key] = device.get(key)
+    return public
 
 
 def _find_matching_device(
@@ -964,6 +984,19 @@ def _stream_channel(mac: str) -> str:
     suffix = str(MATRIX_CONFIG.get("stream_channel_suffix", "")).strip()
     if not suffix:
         return normalized
+
+    suffix_channel, separator, stream_version = suffix.partition("/")
+    suffix_parts = [part for part in suffix_channel.split("-") if part]
+    mac_parts = [part for part in normalized.split("-") if part]
+    has_embedded_channel = (
+        bool(suffix_parts)
+        and len(mac_parts) > 6
+        and [part.lower() for part in mac_parts[-len(suffix_parts):]]
+        == [part.lower() for part in suffix_parts]
+    )
+    if has_embedded_channel:
+        return f"{normalized}/{stream_version}" if separator else normalized
+
     return f"{normalized}-{suffix}"
 
 
