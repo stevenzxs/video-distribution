@@ -269,3 +269,5 @@ Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流�
 浏览器预览还会把诊断事件回传到本地后端日志，格式为
 `预览事件: output=1, event=first_frame, channel=...`，可用于确认哪个通道收到帧、
 收到的是 H.264 还是 H.265，以及最终是否解码成功。
+如果日志出现 `预览取流端口检查 ... status=tcp_failed`，说明本机连不上
+WebSocket 取流端口 `8003`，应检查服务器取流服务、防火墙或网络路由。

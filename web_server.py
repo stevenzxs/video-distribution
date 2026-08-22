@@ -8,6 +8,7 @@ import argparse
 import json
 import logging
 import mimetypes
+import socket
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Dict, List
@@ -50,6 +51,11 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/preview/event":
             payload = self._read_json()
             logger.info("预览事件: %s", _preview_event_summary(payload))
+            if _preview_event_needs_port_check(payload):
+                logger.info(
+                    "预览取流端口检查: %s",
+                    _check_ws_port(str(payload.get("ws_url", ""))),
+                )
             self._send_json({"result": "success", "result_val": 0})
             return
 
@@ -151,6 +157,7 @@ def _preview_event_summary(payload: Dict[str, Any]) -> str:
     for key in (
         "output",
         "event",
+        "ws_url",
         "channel",
         "reason",
         "codec",
@@ -164,6 +171,28 @@ def _preview_event_summary(payload: Dict[str, Any]) -> str:
         if value not in (None, ""):
             parts.append(f"{key}={str(value)[:120]}")
     return ", ".join(parts) if parts else "empty"
+
+
+def _preview_event_needs_port_check(payload: Dict[str, Any]) -> bool:
+    if payload.get("event") != "candidate_failed":
+        return False
+    if payload.get("frames"):
+        return False
+    return payload.get("reason") in {"连接超时", "取流异常", "取流已断开"}
+
+
+def _check_ws_port(ws_url: str) -> str:
+    parsed = urlparse(ws_url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    if not host:
+        return f"url={ws_url or '-'}, status=invalid_url"
+
+    try:
+        with socket.create_connection((host, port), timeout=1.5):
+            return f"url={ws_url}, status=tcp_ok"
+    except OSError as exc:
+        return f"url={ws_url}, status=tcp_failed, error={type(exc).__name__}: {exc}"
 
 
 def main() -> None:

@@ -294,6 +294,7 @@ class PreviewReceiver {
     this.decodedFrames = 0;
     this.lastFrame = null;
     this.waitTimer = null;
+    this.connectTimer = null;
   }
 
   start() {
@@ -326,7 +327,14 @@ class PreviewReceiver {
     try {
       this.ws = new WebSocket(this.stream.ws_url);
       this.ws.binaryType = "arraybuffer";
+      this.connectTimer = window.setTimeout(() => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+          this.tryNextCandidate("连接超时");
+        }
+      }, 5000);
       this.ws.onopen = () => {
+        this.clearConnectTimer();
+        this.report("ws_open");
         this.ws.send(JSON.stringify(candidate.open_header));
         this.setStreamState(`等待码流 ${candidate.channel}`);
         this.drawState("等待码流", candidate.channel);
@@ -355,6 +363,7 @@ class PreviewReceiver {
       window.clearTimeout(this.waitTimer);
       this.waitTimer = null;
     }
+    this.clearConnectTimer();
 
     if (this.decoder) {
       this.closeDecoder();
@@ -478,6 +487,7 @@ class PreviewReceiver {
       window.clearTimeout(this.waitTimer);
       this.waitTimer = null;
     }
+    this.clearConnectTimer();
 
     const currentChannel = this.activeCandidate?.channel || "";
     const nextIndex = this.candidateIndex + 1;
@@ -506,11 +516,19 @@ class PreviewReceiver {
     reportPreviewEvent({
       output: this.outputIndex,
       event,
+      ws_url: this.stream.ws_url,
       channel: this.activeCandidate?.channel || this.stream.channel || "",
       bytes: this.bytes,
       frames: this.frames,
       ...extra,
     });
+  }
+
+  clearConnectTimer() {
+    if (this.connectTimer) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
   }
 
   closeDecoder() {
