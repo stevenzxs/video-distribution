@@ -1,0 +1,30 @@
+http://192.168.130.101:8001/mvapi/v1/wnd/OpenWnd
+POST
+{
+    "src_mac": "6c-df-fb-01-5e-88-00-01",
+    "display_wall": "显示器1",
+    "pos_x": 0,
+    "pos_y": 0,
+    "width": 1920,
+    "height": 1080,
+    "token": "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjQ1ODc0MiwiaXNzIjoiYWRtaW4iLCJqdGkiOiIyODA2MzFlYi1iNDA3LTRiOGQtYjcxMi02N2I2MTZhZGY2ZmUiLCJuYmYiOjQ1NTE0Mn0.63f24l7TGW4MlQmp4j4AloJ1DY_2jSczGrMBSmRjIaA"
+}
+
+视频流
+ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81
+
+
+
+http://192.168.130.101:8001/mvapi/v1/wnd/GetDisplayWallWnds
+{
+    "display_wall": "显示器1",
+    "token": "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjQ1ODc0MiwiaXNzIjoiYWRtaW4iLCJqdGkiOiIyODA2MzFlYi1iNDA3LTRiOGQtYjcxMi02N2I2MTZhZGY2ZmUiLCJuYmYiOjQ1NTE0Mn0.63f24l7TGW4MlQmp4j4AloJ1DY_2jSczGrMBSmRjIaA"
+}
+
+
+http://192.168.130.101:8001/mvapi/v1/wnd/GetDisplayWallOperateStatus
+POST
+{
+    "display_wall": "显示器1",
+    "token": "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjQ1ODc0MiwiaXNzIjoiYWRtaW4iLCJqdGkiOiIyODA2MzFlYi1iNDA3LTRiOGQtYjcxMi02N2I2MTZhZGY2ZmUiLCJuYmYiOjQ1NTE0Mn0.63f24l7TGW4MlQmp4j4AloJ1DY_2jSczGrMBSmRjIaA"
+}

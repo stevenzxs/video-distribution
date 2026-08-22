@@ -28,11 +28,12 @@ DEVICES = {
 
 # 矩阵调度配置
 MATRIX_CONFIG = {
-    # 后端会确保该大屏存在；不存在时按输出解码器数量创建 1xN 大屏。
-    # 平台资源名称长度限制较短，默认使用短 ASCII 名称，避免中文名按字节计算后超限。
-    "display_wall_name": "VW3",
-    "auto_create_display_wall": True,
-    # 1行3列大屏中单个输出窗口尺寸，位置会按输出序号横向排列。
+    # 调度时按 GetDisplayWallList 返回的 index/顺序选择大屏：
+    # 1v1. -> 显示器1，1v2. -> 显示器2，1v3. -> 显示器3。
+    # display_wall_name 仅作为页面初始化和未传 display_wall 时的兼容 fallback。
+    "display_wall_name": "显示器1",
+    "auto_create_display_wall": False,
+    # 单个 1x1 大屏窗口尺寸；实际 OpenWnd 优先使用 GetDisplayWallList 返回的分辨率。
     "screen_width": 1920,
     "screen_height": 1080,
     "display_wall_row": 1,

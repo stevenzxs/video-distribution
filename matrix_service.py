@@ -153,21 +153,12 @@ class MatrixScheduler:
 
         with self._client_lock:
             client = self._authenticated_client()
-            encoder = self._resolve_device(client, "encoder", parsed.input_index)
-            encoder = self._enrich_encoder_info(client, encoder, parsed.input_index)
-            output = self._resolve_device(client, "decoder", parsed.output_index)
-            display_wall = self._ensure_display_wall(
-                client,
-                output_count=len(DEVICES.get("decoders", [])),
-            )
-            self._ensure_display_wall_output(
-                client,
-                display_wall,
-                output,
-                parsed.output_index,
-            )
+            encoder = self._resolve_encoder_from_list(client, parsed.input_index)
+            display_wall_record = self._resolve_display_wall_from_list(client, parsed.output_index)
+            display_wall = str(_first_value(display_wall_record, WALL_NAME_KEYS) or "").strip()
+            output = self._output_from_display_wall(display_wall_record, parsed.output_index)
             logger.info(
-                "输入%d状态: name=%s, ip=%s, mac=%s, type=%s, status=%s, hdmi_status=%s, video_stream=%s",
+                "输入%d状态: name=%s, ip=%s, mac=%s, type=%s, status=%s, hdmi_status=%s",
                 parsed.input_index,
                 encoder.get("name"),
                 encoder.get("ip"),
@@ -175,14 +166,12 @@ class MatrixScheduler:
                 encoder.get("type"),
                 encoder.get("status"),
                 encoder.get("hdmi_status"),
-                _summarize_video_streams(encoder.get("video_stream")),
             )
             window = self._open_output_window(
                 client,
                 display_wall,
                 encoder["mac"],
-                str(encoder.get("name") or ""),
-                parsed.output_index,
+                display_wall_record,
             )
             stream = build_stream_descriptor(encoder, display_wall=display_wall)
             logger.info("输入%d网页取流地址: %s", parsed.input_index, stream["ws_url"])
@@ -228,6 +217,124 @@ class MatrixScheduler:
             raise MatrixError("登录 API 平台失败，请检查用户名、密码和服务器连接", 502)
 
         return self._client
+
+    def _resolve_encoder_from_list(
+        self,
+        client: APIClient,
+        input_index: int,
+    ) -> Dict[str, Any]:
+        result = client.get_encoder_list(page_index=1, page_size=100)
+        if not is_success_response(result):
+            raise MatrixError(f"获取编码器列表失败 {format_api_error(result)}", 502)
+
+        encoders = _extract_device_records(result)
+        configured = DEVICES.get("encoders", [])[input_index - 1]
+        matched = _find_matching_device(configured, encoders)
+        if matched is None and len(encoders) >= input_index:
+            matched = encoders[input_index - 1]
+        if matched is None:
+            raise MatrixError(
+                f"未找到输入{input_index}编码器 {configured.get('name')}({configured.get('ip')})",
+                502,
+            )
+
+        encoder = _public_device(matched, input_index)
+        if not encoder.get("mac"):
+            raise MatrixError(f"输入{input_index}编码器缺少 MAC，无法开窗", 502)
+        return encoder
+
+    def _resolve_display_wall_from_list(
+        self,
+        client: APIClient,
+        output_index: int,
+    ) -> Dict[str, Any]:
+        result = client.get_display_wall_list(page_index=1, page_size=20)
+        if not is_success_response(result):
+            raise MatrixError(f"获取大屏列表失败 {format_api_error(result)}", 502)
+
+        walls = _extract_display_wall_records(result)
+        indexed_wall = next(
+            (
+                wall for wall in walls
+                if _optional_int(_first_value(wall, ("index",))) == output_index
+            ),
+            None,
+        )
+        wall = indexed_wall or (walls[output_index - 1] if len(walls) >= output_index else None)
+        if wall is None:
+            raise MatrixError(f"大屏列表中没有输出{output_index}对应的大屏", 502)
+
+        display_wall = str(_first_value(wall, WALL_NAME_KEYS) or "").strip()
+        if not display_wall:
+            raise MatrixError(f"输出{output_index}对应的大屏缺少 name", 502)
+
+        logger.info("输出%d大屏: %s", output_index, display_wall)
+        return wall
+
+    def _output_from_display_wall(
+        self,
+        wall: Dict[str, Any],
+        output_index: int,
+    ) -> Dict[str, Any]:
+        configured_outputs = DEVICES.get("decoders", [])
+        configured = configured_outputs[output_index - 1] if len(configured_outputs) >= output_index else {}
+        output = _public_device(configured, output_index)
+        display_wall = str(_first_value(wall, WALL_NAME_KEYS) or "").strip()
+        if display_wall:
+            output["name"] = display_wall
+            output["display_wall"] = display_wall
+        return output
+
+    def _open_output_window(
+        self,
+        client: APIClient,
+        display_wall: str,
+        src_mac: str,
+        display_wall_record: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        width = _even_int(
+            _first_value(display_wall_record, ("resolution_x", "width"))
+            or MATRIX_CONFIG.get("screen_width", 1920)
+        )
+        height = _even_int(
+            _first_value(display_wall_record, ("resolution_y", "height"))
+            or MATRIX_CONFIG.get("screen_height", 1080)
+        )
+        pos_x = 0
+        pos_y = 0
+
+        logger.info(
+            "开窗: display_wall=%s, src_mac=%s, pos=(%d,%d), size=%dx%d",
+            display_wall,
+            src_mac,
+            pos_x,
+            pos_y,
+            width,
+            height,
+        )
+        result = client.open_wnd(
+            display_wall=display_wall,
+            src_mac=src_mac,
+            pos_x=pos_x,
+            pos_y=pos_y,
+            width=width,
+            height=height,
+        )
+        if not is_success_response(result):
+            raise MatrixError(
+                f"开窗失败 {format_api_error(result)}，命令位置为"
+                f"({pos_x}, {pos_y}, {width}, {height})",
+                502,
+            )
+
+        logger.info("开窗结果: %s", _summarize_api_result(result))
+        return {
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+            "width": width,
+            "height": height,
+            "result": result,
+        }
 
     def _resolve_device(
         self,
@@ -511,7 +618,7 @@ class MatrixScheduler:
                 502,
             )
 
-    def _open_output_window(
+    def _open_output_window_legacy(
         self,
         client: APIClient,
         display_wall: str,
