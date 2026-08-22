@@ -6,23 +6,26 @@
 """
 import argparse
 import base64
+import hashlib
 import json
 import logging
 import mimetypes
 import os
+import select
 import socket
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Dict, List
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
-from config import LOG_FORMAT, LOG_LEVEL
+from config import API_BASE_URL, LOG_FORMAT, LOG_LEVEL
 from matrix_service import MatrixError, MatrixScheduler, get_matrix_state
 
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 STATIC_DIR = WEB_DIR / "static"
+WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -35,7 +38,11 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_empty(204)
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+        if path == "/api/preview/ws":
+            self._proxy_preview_ws(parsed_path.query)
+            return
         if path == "/":
             self._serve_file(WEB_DIR / "index.html")
             return
@@ -47,6 +54,59 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             self._serve_file(STATIC_DIR / relative)
             return
         self._send_json({"error": "not found"}, 404)
+
+    def _proxy_preview_ws(self, query: str) -> None:
+        output = _preview_output_from_query(query)
+        stream = _preview_stream_for_output(
+            self.scheduler.runtime_state.snapshot(),
+            output,
+        )
+        if not stream:
+            self._send_json({"error": f"output {output} has no active stream"}, 404)
+            return
+
+        upstream_url = str(stream.get("ws_url", ""))
+        protocol = str(stream.get("ws_protocol", ""))
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if not key:
+            self._send_json({"error": "missing Sec-WebSocket-Key"}, 400)
+            return
+
+        try:
+            upstream = _open_upstream_websocket(
+                upstream_url,
+                origin=API_BASE_URL,
+                protocol=protocol,
+            )
+        except OSError as exc:
+            logger.error(
+                "预览代理连接上游失败: output=%s, url=%s, error=%s: %s",
+                output,
+                upstream_url,
+                type(exc).__name__,
+                exc,
+            )
+            self._send_json({"error": f"upstream websocket failed: {exc}"}, 502)
+            return
+
+        response_lines = [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            f"Sec-WebSocket-Accept: {_websocket_accept_key(key)}",
+        ]
+        response = "\r\n".join(response_lines) + "\r\n\r\n"
+        self.request.sendall(response.encode("ascii"))
+        self.close_connection = True
+
+        logger.info(
+            "预览代理已连接: output=%s, upstream=%s, origin=%s, protocol=%s",
+            output,
+            upstream_url,
+            API_BASE_URL,
+            "yes" if protocol else "no",
+        )
+        _relay_websocket(self.request, upstream)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -62,6 +122,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
                 for handshake_result in _check_ws_handshakes(
                     str(payload.get("ws_url", "")),
                     origin=origin,
+                    protocol=str(payload.get("ws_protocol", "")),
                 ):
                     logger.info("预览取流握手检查: %s", handshake_result)
             self._send_json({"result": "success", "result_val": 0})
@@ -166,6 +227,7 @@ def _preview_event_summary(payload: Dict[str, Any]) -> str:
         "output",
         "event",
         "ws_url",
+        "connect_url",
         "channel",
         "reason",
         "codec",
@@ -203,15 +265,34 @@ def _check_ws_port(ws_url: str) -> str:
         return f"url={ws_url}, status=tcp_failed, error={type(exc).__name__}: {exc}"
 
 
-def _check_ws_handshakes(ws_url: str, origin: str = "") -> List[str]:
+def _check_ws_handshakes(
+    ws_url: str,
+    origin: str = "",
+    protocol: str = "",
+) -> List[str]:
     results = []
+    origins = []
     if origin:
-        results.append(_check_ws_handshake(ws_url, origin=origin))
-    results.append(_check_ws_handshake(ws_url, origin=""))
+        origins.append(origin)
+    if API_BASE_URL and API_BASE_URL not in origins:
+        origins.append(API_BASE_URL)
+    origins.append("")
+    for candidate_origin in origins:
+        results.append(
+            _check_ws_handshake(
+                ws_url,
+                origin=candidate_origin,
+                protocol=protocol,
+            )
+        )
     return results
 
 
-def _check_ws_handshake(ws_url: str, origin: str = "") -> str:
+def _check_ws_handshake(
+    ws_url: str,
+    origin: str = "",
+    protocol: str = "",
+) -> str:
     parsed = urlparse(ws_url)
     host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "wss" else 80)
@@ -232,6 +313,8 @@ def _check_ws_handshake(ws_url: str, origin: str = "") -> str:
     ]
     if origin:
         headers.append(f"Origin: {origin}")
+    if protocol:
+        headers.append(f"Sec-WebSocket-Protocol: {protocol}")
     request = "\r\n".join(headers) + "\r\n\r\n"
 
     try:
@@ -240,10 +323,14 @@ def _check_ws_handshake(ws_url: str, origin: str = "") -> str:
             sock.sendall(request.encode("ascii"))
             response = sock.recv(512).decode("iso-8859-1", errors="replace")
     except socket.timeout:
-        return f"url={ws_url}, origin={origin or '-'}, status=handshake_timeout"
+        return (
+            f"url={ws_url}, origin={origin or '-'}, protocol={'yes' if protocol else 'no'}, "
+            "status=handshake_timeout"
+        )
     except OSError as exc:
         return (
-            f"url={ws_url}, origin={origin or '-'}, status=handshake_failed, "
+            f"url={ws_url}, origin={origin or '-'}, protocol={'yes' if protocol else 'no'}, "
+            "status=handshake_failed, "
             f"error={type(exc).__name__}: {exc}"
         )
 
@@ -254,7 +341,121 @@ def _check_ws_handshake(ws_url: str, origin: str = "") -> str:
         status = "handshake_rejected"
     else:
         status = "handshake_empty"
-    return f"url={ws_url}, origin={origin or '-'}, status={status}, response={first_line[:160]}"
+    return (
+        f"url={ws_url}, origin={origin or '-'}, protocol={'yes' if protocol else 'no'}, "
+        f"status={status}, response={first_line[:160]}"
+    )
+
+
+def _preview_output_from_query(query: str) -> int:
+    raw_output = parse_qs(query).get("output", ["0"])[0]
+    try:
+        return int(raw_output)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _preview_stream_for_output(state: Dict[str, Any], output: int) -> Dict[str, Any]:
+    for screen in state.get("screens", []):
+        if screen.get("index") != output:
+            continue
+        assignment = screen.get("assignment") or {}
+        stream = assignment.get("stream") or {}
+        return stream if isinstance(stream, dict) else {}
+    return {}
+
+
+def _websocket_accept_key(key: str) -> str:
+    digest = hashlib.sha1(f"{key}{WEBSOCKET_GUID}".encode("ascii")).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def _open_upstream_websocket(
+    ws_url: str,
+    origin: str,
+    protocol: str,
+) -> socket.socket:
+    parsed = urlparse(ws_url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    if not host:
+        raise OSError(f"invalid websocket url: {ws_url}")
+    if parsed.scheme == "wss":
+        raise OSError("wss upstream is not supported by the local preview proxy")
+
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    headers = [
+        f"GET {path} HTTP/1.1",
+        f"Host: {host}:{port}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        "Cache-Control: no-cache",
+        "Pragma: no-cache",
+        "Accept-Language: zh-CN,zh;q=0.9",
+        f"Origin: {origin}",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+    ]
+    if protocol:
+        headers.append(f"Sec-WebSocket-Protocol: {protocol}")
+    request = "\r\n".join(headers) + "\r\n\r\n"
+
+    sock = socket.create_connection((host, port), timeout=5.0)
+    try:
+        sock.settimeout(5.0)
+        sock.sendall(request.encode("ascii"))
+        response = _recv_http_headers(sock)
+        first_line = response.splitlines()[0] if response else ""
+        if " 101 " not in f" {first_line} ":
+            raise OSError(f"upstream handshake rejected: {first_line[:160]}")
+        sock.settimeout(None)
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
+def _recv_http_headers(sock: socket.socket) -> str:
+    chunks = []
+    total = 0
+    while total < 8192:
+        chunk = sock.recv(1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if b"\r\n\r\n" in b"".join(chunks):
+            break
+    return b"".join(chunks).decode("iso-8859-1", errors="replace")
+
+
+def _relay_websocket(client: socket.socket, upstream: socket.socket) -> None:
+    sockets = [client, upstream]
+    try:
+        while True:
+            readable, _, errored = select.select(sockets, [], sockets, 1.0)
+            if errored:
+                return
+            for source in readable:
+                try:
+                    data = source.recv(65536)
+                except OSError:
+                    return
+                if not data:
+                    return
+                target = upstream if source is client else client
+                try:
+                    target.sendall(data)
+                except OSError:
+                    return
+    finally:
+        try:
+            upstream.close()
+        except OSError:
+            pass
 
 
 def main() -> None:

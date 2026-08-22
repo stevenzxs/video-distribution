@@ -240,12 +240,16 @@ Web 控制台会复用一次登录获得的 token，不会在每次矩阵切换�
 2. `GetEncoderList` 获取编码器列表，按输入序号选择编码器。
 3. `GetDisplayWallList` 获取大屏列表，按输出序号选择大屏；参考 `docs/GetDisplayWallList.json`，输出 1/2/3 对应 `显示器1/显示器2/显示器3`。
 4. 调用 `/mvapi/v1/wnd/OpenWnd`，例如 `1v1.` 使用 `display_wall="显示器1"`、`pos_x=0`、`pos_y=0`、`width=1920`、`height=1080`。
-5. Web 页面通过 `ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81` 获取 `显示器1` 的视频流。
+5. Web 页面通过本地 `/api/preview/ws?output=1` 代理获取视频流；代理连接上游
+   `ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81`，并使用登录 token 作为 `Sec-WebSocket-Protocol`。
 
 如果物理大屏窗口已确认存在，但 Web 页面上方预览黑屏，重点看日志里的
 `输入N网页取流地址` 和 `输入N网页取流通道`。8003 取流地址需要携带当前大屏名，
 例如输出 1 应连接 `ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81`；
-只连接 `ws://192.168.130.101:8003` 会出现 TCP 可达但 WebSocket 握手超时。
+只连接 `ws://192.168.130.101:8003` 会出现 TCP 可达但 WebSocket 握手超时。平台
+WebSocket 握手还需要 `Sec-WebSocket-Protocol` 携带当前登录 token，前端会使用
+本地 WebSocket 代理连接上游 8003，并把 `Origin` 固定为 API 服务地址
+`http://192.168.130.101:8001`。
 平台有时会在编码器 MAC 中直接返回通道号，例如
 `6c-df-fb-01-5e-80-00-01`，此时 WebSocket 取流通道应为
 `6c-df-fb-01-5e-80-00-01/v3`，不能再拼成

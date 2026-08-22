@@ -287,6 +287,7 @@ class PreviewReceiver {
     this.activeCandidate = null;
     this.ws = null;
     this.decoder = null;
+    this.connectUrl = "";
     this.decodeDisabled = false;
     this.timestamp = 0;
     this.bytes = 0;
@@ -322,10 +323,15 @@ class PreviewReceiver {
     this.frames = 0;
     this.decodedFrames = 0;
     this.lastFrame = null;
+    this.connectUrl = resolveWsUrl(this.stream.ws_proxy_path || this.stream.ws_url);
     this.report("candidate_start");
 
     try {
-      this.ws = new WebSocket(this.stream.ws_url);
+      const useDirectProtocol = !this.stream.ws_proxy_path;
+      const protocol = useDirectProtocol ? String(this.stream.ws_protocol || "").trim() : "";
+      this.ws = protocol
+        ? new WebSocket(this.connectUrl, protocol)
+        : new WebSocket(this.connectUrl);
       this.ws.binaryType = "arraybuffer";
       this.connectTimer = window.setTimeout(() => {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -519,6 +525,8 @@ class PreviewReceiver {
       output: this.outputIndex,
       event,
       ws_url: this.stream.ws_url,
+      connect_url: this.connectUrl || this.stream.ws_url,
+      ws_protocol: this.stream.ws_protocol || "",
       channel: this.activeCandidate?.channel || this.stream.channel || "",
       bytes: this.bytes,
       frames: this.frames,
@@ -723,6 +731,14 @@ function normalizeStreamCandidates(stream) {
         t: "close",
       },
     }));
+}
+
+function resolveWsUrl(url) {
+  if (!url || !url.startsWith("/")) {
+    return url;
+  }
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${url}`;
 }
 
 function reportPreviewEvent(payload) {

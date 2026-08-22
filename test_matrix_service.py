@@ -468,6 +468,8 @@ def test_scheduler_opens_expected_output_window_from_display_wall_list():
     assert route["stream"]["ws_url"] == (
         "ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A82"
     )
+    assert route["stream"]["ws_proxy_path"] == "/api/preview/ws?output=2"
+    assert route["stream"]["ws_protocol"] == "fake-token"
 
 
 def test_scheduler_reuses_login_for_consecutive_switches():

@@ -173,7 +173,12 @@ class MatrixScheduler:
                 encoder["mac"],
                 display_wall_record,
             )
-            stream = build_stream_descriptor(encoder, display_wall=display_wall)
+            stream = build_stream_descriptor(
+                encoder,
+                display_wall=display_wall,
+                output_index=parsed.output_index,
+                ws_protocol=str(getattr(client, "token", "") or ""),
+            )
             logger.info("输入%d网页取流地址: %s", parsed.input_index, stream["ws_url"])
             logger.info(
                 "输入%d网页取流通道: %s",
@@ -853,6 +858,8 @@ class MatrixScheduler:
 def build_stream_descriptor(
     encoder: Dict[str, Any],
     display_wall: str = "",
+    output_index: Optional[int] = None,
+    ws_protocol: str = "",
 ) -> Dict[str, Any]:
     """生成浏览器连接取流 WebSocket 需要的信息。"""
     channel = _stream_channel(encoder["mac"])
@@ -863,6 +870,8 @@ def build_stream_descriptor(
     ]
     return {
         "ws_url": _stream_ws_url(display_wall),
+        "ws_proxy_path": f"/api/preview/ws?output={output_index}" if output_index else "",
+        "ws_protocol": ws_protocol,
         "channel": channel,
         "candidates": candidates,
         "video_stream": encoder.get("video_stream", []),
