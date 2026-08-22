@@ -186,6 +186,14 @@ class MatrixScheduler:
                 parsed.input_index,
                 stream["open_header"]["c"],
             )
+            logger.info(
+                "输入%d网页取流候选: %s",
+                parsed.input_index,
+                ", ".join(
+                    candidate["open_header"]["c"]
+                    for candidate in stream.get("candidates", [])
+                ),
+            )
 
             route = {
                 "command": parsed.text,

@@ -494,6 +494,9 @@ Web 页面上方预览使用 WebSocket 另走取流链路。文档示例中的 6
 Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流版本，默认
 先用 `stream_channel_suffix` 指定的版本，再依次尝试 `/v1`、`/v2`、`/v3` 中
 尚未尝试过的版本。
+浏览器预览会把关键诊断事件回传到本地 Web 后端日志，例如
+`candidate_start`、`first_frame`、`candidate_failed`、`decode_ok`。后端日志中的
+`预览事件` 可用于判断哪个取流通道收到帧、帧编码类型，以及浏览器是否解码成功。
 
 如果 `GetDisplayWallInfo` 返回 `resource not exist`，说明目标大屏墙还没有创建
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，

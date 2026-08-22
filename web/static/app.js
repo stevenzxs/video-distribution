@@ -291,6 +291,7 @@ class PreviewReceiver {
     this.timestamp = 0;
     this.bytes = 0;
     this.frames = 0;
+    this.decodedFrames = 0;
     this.lastFrame = null;
     this.waitTimer = null;
   }
@@ -318,7 +319,9 @@ class PreviewReceiver {
     this.timestamp = 0;
     this.bytes = 0;
     this.frames = 0;
+    this.decodedFrames = 0;
     this.lastFrame = null;
+    this.report("candidate_start");
 
     try {
       this.ws = new WebSocket(this.stream.ws_url);
@@ -364,6 +367,7 @@ class PreviewReceiver {
     if (typeof data === "string") {
       this.setStreamState(data.slice(0, 24));
       this.drawState("取流消息", data.slice(0, 80));
+      this.report("text_message", {detail: data.slice(0, 160)});
       return;
     }
 
@@ -381,6 +385,14 @@ class PreviewReceiver {
     this.bytes += frame.payload.byteLength;
     this.frames += 1;
     this.lastFrame = frame;
+    if (this.frames === 1) {
+      this.report("first_frame", {
+        codec: codecName(frame.codec),
+        width: frame.width,
+        height: frame.height,
+        detail: streamTypeName(frame.streamType),
+      });
+    }
     if (frame.streamType !== 1) {
       this.setStreamState(`收到${streamTypeName(frame.streamType)}`);
       return;
@@ -416,6 +428,14 @@ class PreviewReceiver {
             if (canvas) {
               const ctx = prepareCanvas(canvas);
               ctx.drawImage(videoFrame, 0, 0, canvas.width, canvas.height);
+            }
+            this.decodedFrames += 1;
+            if (this.decodedFrames === 1) {
+              this.report("decode_ok", {
+                codec: codecName(frame.codec),
+                width: videoFrame.displayWidth || frame.width,
+                height: videoFrame.displayHeight || frame.height,
+              });
             }
             videoFrame.close();
             this.setStreamState(`解码 ${formatBytes(this.bytes)}`);
@@ -461,6 +481,7 @@ class PreviewReceiver {
 
     const currentChannel = this.activeCandidate?.channel || "";
     const nextIndex = this.candidateIndex + 1;
+    this.report("candidate_failed", {reason});
     if (nextIndex >= this.candidates.length) {
       this.setStreamState(reason);
       const detail = currentChannel || this.stream.channel || "";
@@ -479,6 +500,17 @@ class PreviewReceiver {
     this.closeActiveSocket();
     this.startCandidate(nextIndex);
     return true;
+  }
+
+  report(event, extra = {}) {
+    reportPreviewEvent({
+      output: this.outputIndex,
+      event,
+      channel: this.activeCandidate?.channel || this.stream.channel || "",
+      bytes: this.bytes,
+      frames: this.frames,
+      ...extra,
+    });
   }
 
   closeDecoder() {
@@ -671,6 +703,18 @@ function normalizeStreamCandidates(stream) {
         t: "close",
       },
     }));
+}
+
+function reportPreviewEvent(payload) {
+  try {
+    fetch("/api/preview/event", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  } catch (error) {
+    // 诊断日志失败不影响预览。
+  }
 }
 
 function codecName(codec) {

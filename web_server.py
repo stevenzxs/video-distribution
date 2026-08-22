@@ -47,6 +47,12 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/preview/event":
+            payload = self._read_json()
+            logger.info("预览事件: %s", _preview_event_summary(payload))
+            self._send_json({"result": "success", "result_val": 0})
+            return
+
         if path != "/api/matrix/switch":
             self._send_json({"error": "not found"}, 404)
             return
@@ -138,6 +144,26 @@ def _commands_from_payload(payload: Dict[str, Any]) -> List[str]:
             raise MatrixError("输出编号必须为数字")
         commands.append(f"{input_index}v{output_index}.")
     return commands
+
+
+def _preview_event_summary(payload: Dict[str, Any]) -> str:
+    parts = []
+    for key in (
+        "output",
+        "event",
+        "channel",
+        "reason",
+        "codec",
+        "width",
+        "height",
+        "bytes",
+        "frames",
+        "detail",
+    ):
+        value = payload.get(key)
+        if value not in (None, ""):
+            parts.append(f"{key}={str(value)[:120]}")
+    return ", ".join(parts) if parts else "empty"
 
 
 def main() -> None:
