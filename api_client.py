@@ -349,13 +349,21 @@ class APIClient:
 
     def get_display_wall_decoder_list(self, display_wall: str) -> Dict[str, Any]:
         """获取大屏已绑定解码器列表"""
-        data = {"display_wall": display_wall}
+        data = {"name": display_wall}
         return self._make_request("/mvapi/v1/displaywall/GetDispWallDecoderList", data)
 
-    def get_available_decoders(self, display_wall: str) -> Dict[str, Any]:
+    def get_available_decoders(self, display_wall: str, start: int = 0,
+                               size: int = 100, decoder_type: int = 0,
+                               query_name: str = "") -> Dict[str, Any]:
         """获取大屏可用解码器列表"""
-        data = {"display_wall": display_wall}
-        return self._make_request("/mvapi/v1/displaywall/GetAvailableDecoders", data)
+        data = {
+            "start": start,
+            "size": size,
+            "type": decoder_type,
+            "query_name": query_name,
+            "name": display_wall,
+        }
+        return self._make_request("/mvapi/v1/displaywall/GetAvailableDecoder", data)
 
     # ==================== 窗口操作API ====================
 

@@ -218,8 +218,11 @@
 - **绑定视频解码器**: `/mvapi/v1/displaywall/BindDecoder`
 - **绑定音频解码器**: `/mvapi/v1/displaywall/BindAudioDecoder`
 - **解绑解码器**: `/mvapi/v1/displaywall/UnBindDecoder`
-- **获取可用解码器**: `/mvapi/v1/displaywall/GetAvailableDecoders`
+- **获取可用解码器**: `/mvapi/v1/displaywall/GetAvailableDecoder`
+  - 请求参数：`start`, `size`, `type`, `query_name`, `name`
+  - `name` 为大屏名称，`type` 为 0-视频解码器、1-音频解码器
 - **获取已绑定解码器**: `/mvapi/v1/displaywall/GetDispWallDecoderList`
+  - 请求参数：`name`，表示大屏名称
 
 #### 3.5.8 大屏控制操作
 - **打开大屏**: `/mvapi/v1/displaywall/OpenDisplayWall`

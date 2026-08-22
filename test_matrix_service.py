@@ -180,6 +180,30 @@ def test_create_display_wall_payload_matches_platform_shape():
     }
 
 
+def test_display_wall_decoder_list_uses_name_field():
+    client = CapturingAPIClient()
+
+    client.get_display_wall_decoder_list("VW3")
+
+    assert client.last_endpoint == "/mvapi/v1/displaywall/GetDispWallDecoderList"
+    assert client.last_data == {"name": "VW3"}
+
+
+def test_available_decoder_payload_matches_platform_shape():
+    client = CapturingAPIClient()
+
+    client.get_available_decoders("VW3")
+
+    assert client.last_endpoint == "/mvapi/v1/displaywall/GetAvailableDecoder"
+    assert client.last_data == {
+        "start": 0,
+        "size": 100,
+        "type": 0,
+        "query_name": "",
+        "name": "VW3",
+    }
+
+
 def test_parse_matrix_command():
     command = parse_matrix_command(" 1v3. ")
     assert command.input_index == 1

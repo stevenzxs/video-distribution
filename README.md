@@ -240,4 +240,4 @@ python web_server.py --host 127.0.0.1 --port 8080
 - 输出 N 对应的解码器已经绑定到这个大屏。
 - 大屏规格和 `screen_width`、`screen_height` 对应，避免窗口坐标超出大屏范围。
 
-Web 控制台后端会在开窗前调用 `GetDispWallDecoderList` 做只读校验。如果大屏未绑定解码器，会直接返回明确错误，不再让问题落到 `sdk failed: -10`。
+Web 控制台后端会在开窗前调用 `GetDispWallDecoderList` 做只读校验，请求体使用 `{"name": "<大屏名称>"}`。如果大屏未绑定解码器，会直接返回明确错误，不再让问题落到 `sdk failed: -10`。
