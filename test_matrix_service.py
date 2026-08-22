@@ -23,6 +23,8 @@ class FakeAPIClient:
         self.created_walls = []
         self.bind_calls = []
         self.logged_out = False
+        self.login_count = 0
+        self.token = None
         self.bind_result = bind_result or {"result": "success", "result_val": 0}
         self.display_walls = display_walls
         if self.display_walls is None:
@@ -54,10 +56,15 @@ class FakeAPIClient:
         self.bound_decoders = list(bound_decoders)
 
     def login(self, username, password):
-        return username == "admin" and bool(password)
+        self.login_count += 1
+        success = username == "admin" and bool(password)
+        if success:
+            self.token = "fake-token"
+        return success
 
     def logout(self):
         self.logged_out = True
+        self.token = None
         return {"result": "success", "result_val": 0}
 
     def get_encoder_list(self, page_index=1, page_size=100):
@@ -294,8 +301,43 @@ def test_scheduler_opens_expected_output_window():
             "height": 1080,
         }
     ]
-    assert fake.logged_out is True
+    assert fake.logged_out is False
+    assert fake.login_count == 1
     assert route["stream"]["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
+
+
+def test_scheduler_reuses_login_for_consecutive_switches():
+    fake = FakeAPIClient()
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    first_route = scheduler.switch_command("1v2.")
+    second_route = scheduler.switch_command("2v2.")
+
+    assert first_route["command"] == "1v2."
+    assert second_route["command"] == "2v2."
+    assert fake.login_count == 1
+    assert fake.logged_out is False
+    assert fake.opened_windows == [
+        {
+            "display_wall": "VW3",
+            "src_mac": "00-40-01-2b-05-27",
+            "pos_x": 1920,
+            "pos_y": 0,
+            "width": 1920,
+            "height": 1080,
+        },
+        {
+            "display_wall": "VW3",
+            "src_mac": "00-40-01-2b-05-28",
+            "pos_x": 1920,
+            "pos_y": 0,
+            "width": 1920,
+            "height": 1080,
+        },
+    ]
 
 
 def test_scheduler_binds_unbound_display_wall_before_open_wnd():

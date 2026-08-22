@@ -131,16 +131,15 @@ class MatrixScheduler:
     ) -> None:
         self.client_factory = client_factory
         self.runtime_state = runtime_state
+        self._client: Optional[APIClient] = None
+        self._client_lock = threading.RLock()
 
     def switch_command(self, command: str) -> Dict[str, Any]:
         parsed = parse_matrix_command(command)
-        client = self.client_factory()
         logger.info("矩阵指令 %s: 输入%d -> 输出%d", parsed.text, parsed.input_index, parsed.output_index)
 
-        if not client.login(TEST_USER["username"], TEST_USER["password"]):
-            raise MatrixError("登录 API 平台失败，请检查用户名、密码和服务器连接", 502)
-
-        try:
+        with self._client_lock:
+            client = self._authenticated_client()
             encoder = self._resolve_device(client, "encoder", parsed.input_index)
             output = self._resolve_device(client, "decoder", parsed.output_index)
             display_wall = self._ensure_display_wall(
@@ -176,11 +175,18 @@ class MatrixScheduler:
                 output.get("mac"),
             )
             return route
-        finally:
-            try:
-                client.logout()
-            except Exception:
-                pass
+
+    def _authenticated_client(self) -> APIClient:
+        if self._client is None:
+            self._client = self.client_factory()
+
+        if getattr(self._client, "token", None):
+            return self._client
+
+        if not self._client.login(TEST_USER["username"], TEST_USER["password"]):
+            raise MatrixError("登录 API 平台失败，请检查用户名、密码和服务器连接", 502)
+
+        return self._client
 
     def _resolve_device(
         self,

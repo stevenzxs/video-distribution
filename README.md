@@ -230,6 +230,8 @@ python web_server.py --host 127.0.0.1 --port 8080
 
 如果设备列表 API 未返回 MAC，请在 `config.py` 对应设备的 `mac` 字段中补充。后端会按输出解码器数量确保目标大屏存在：3 个解码器会创建 1 行 3 列的大屏墙，并在 `CreateDisplayWall` 请求中自动补 `create_time` 当前秒级时间戳。`MATRIX_CONFIG["display_wall_name"]` 是目标大屏名称，默认 `VW3`；平台资源名长度限制较短，建议使用短 ASCII 名称。
 
+Web 控制台会复用一次登录获得的 token，不会在每次矩阵切换后调用 `Logout`。连续测试 `1v2.`、`2v2.` 时应直接复用当前会话继续下发矩阵指令。
+
 ### OpenWnd 报 `sdk failed: -10`
 
 `/mvapi/v1/wnd/OpenWnd` 是底层 SDK 调度动作。调用前需要确认：
