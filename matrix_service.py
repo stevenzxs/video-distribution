@@ -14,9 +14,24 @@ from config import API_BASE_URL, DEVICES, MATRIX_CONFIG, TEST_USER, WS_BASE_URL
 
 
 COMMAND_PATTERN = re.compile(r"^\s*([1-3])v([1-3])\.\s*$", re.IGNORECASE)
-MAC_KEYS = ("mac", "src_mac", "device_mac", "dev_mac")
-IP_KEYS = ("ip", "ip_addr", "device_ip")
-NAME_KEYS = ("name", "device_name")
+MAC_KEYS = (
+    "mac",
+    "src_mac",
+    "device_mac",
+    "dev_mac",
+    "mac_addr",
+    "macAddr",
+    "decoder_mac",
+    "decoderMac",
+)
+IP_KEYS = ("ip", "ip_addr", "ipAddr", "device_ip", "deviceIp", "decoder_ip", "decoderIp")
+NAME_KEYS = (
+    "name",
+    "device_name",
+    "deviceName",
+    "decoder_name",
+    "decoderName",
+)
 
 
 class MatrixError(Exception):
@@ -119,6 +134,12 @@ class MatrixScheduler:
             encoder = self._resolve_device(client, "encoder", parsed.input_index)
             output = self._resolve_device(client, "decoder", parsed.output_index)
             display_wall = self._resolve_display_wall(client)
+            self._validate_display_wall_output(
+                client,
+                display_wall,
+                output,
+                parsed.output_index,
+            )
             window = self._open_output_window(
                 client,
                 display_wall,
@@ -208,6 +229,50 @@ class MatrixScheduler:
         if not name:
             raise MatrixError("API 返回的大屏缺少 name 字段", 502)
         return str(name)
+
+    def _validate_display_wall_output(
+        self,
+        client: APIClient,
+        display_wall: str,
+        output: Dict[str, Any],
+        output_index: int,
+    ) -> None:
+        info_result = client.get_display_wall_info(display_wall)
+        if is_success_response(info_result):
+            row = _optional_int(info_result.get("row"))
+            column = _optional_int(info_result.get("column"))
+            if row and column and output_index > row * column:
+                raise MatrixError(
+                    f"输出{output_index}超出大屏 {display_wall} 的规格 "
+                    f"{row}x{column}",
+                    502,
+                )
+
+        bound_result = client.get_display_wall_decoder_list(display_wall)
+        if not is_success_response(bound_result):
+            raise MatrixError(
+                f"获取大屏 {display_wall} 已绑定解码器失败 "
+                f"{format_api_error(bound_result)}",
+                502,
+            )
+
+        bound_decoders = _extract_device_records(bound_result)
+        if not bound_decoders:
+            raise MatrixError(
+                f"大屏 {display_wall} 未绑定任何解码器，OpenWnd 会被底层 SDK 拒绝。"
+                "请先在平台将 3 个输出解码器绑定到该大屏，或在 config.py 的 "
+                "MATRIX_CONFIG.display_wall_name 指定已经完成绑定的 1x3 大屏。",
+                502,
+            )
+
+        if not _device_record_matches(output, bound_decoders):
+            bound_summary = _summarize_devices(bound_decoders)
+            raise MatrixError(
+                f"输出{output_index}对应的解码器 {output.get('name')} "
+                f"({output.get('ip') or output.get('mac')}) 未绑定到大屏 {display_wall}。"
+                f"当前已绑定: {bound_summary}",
+                502,
+            )
 
     def _open_output_window(
         self,
@@ -313,8 +378,68 @@ def _first_value(data: Dict[str, Any], keys: Iterable[str]) -> Optional[Any]:
     return None
 
 
+def _optional_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_mac(mac: Any) -> str:
     return str(mac).strip().replace(":", "-")
+
+
+def _extract_device_records(payload: Any) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            if _first_value(value, (*MAC_KEYS, *IP_KEYS, *NAME_KEYS)):
+                records.append(value)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return records
+
+
+def _device_record_matches(
+    expected: Dict[str, Any],
+    candidates: Iterable[Dict[str, Any]],
+) -> bool:
+    expected_mac = _normalize_mac(expected.get("mac", ""))
+    expected_ip = str(expected.get("ip", "")).strip()
+    expected_name = str(expected.get("name", "")).strip()
+
+    for candidate in candidates:
+        candidate_mac = _normalize_mac(_first_value(candidate, MAC_KEYS) or "")
+        candidate_ip = str(_first_value(candidate, IP_KEYS) or "").strip()
+        candidate_name = str(_first_value(candidate, NAME_KEYS) or "").strip()
+
+        if expected_mac and candidate_mac and expected_mac == candidate_mac:
+            return True
+        if expected_ip and candidate_ip and expected_ip == candidate_ip:
+            return True
+        if expected_name and candidate_name and expected_name == candidate_name:
+            return True
+
+    return False
+
+
+def _summarize_devices(devices: Iterable[Dict[str, Any]]) -> str:
+    labels = []
+    for device in devices:
+        name = _first_value(device, NAME_KEYS)
+        ip = _first_value(device, IP_KEYS)
+        mac = _first_value(device, MAC_KEYS)
+        parts = [str(item) for item in (name, ip, mac) if item]
+        if parts:
+            labels.append("/".join(parts))
+
+    return ", ".join(labels[:6]) if labels else "无"
 
 
 def _stream_channel(mac: str) -> str:

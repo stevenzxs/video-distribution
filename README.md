@@ -228,3 +228,14 @@ python web_server.py --host 127.0.0.1 --port 8080
 - 大屏名称和单屏尺寸：`MATRIX_CONFIG`
 
 如果设备列表 API 未返回 MAC，请在 `config.py` 对应设备的 `mac` 字段中补充。`MATRIX_CONFIG["display_wall_name"]` 留空时，后端会使用平台返回的第一个大屏。
+
+### OpenWnd 报 `sdk failed: -10`
+
+`/mvapi/v1/wnd/OpenWnd` 是底层 SDK 调度动作。调用前需要确认：
+
+- `MATRIX_CONFIG["display_wall_name"]` 指向实际 1 行 3 列矩阵大屏。
+- 该大屏已经绑定 3 个输出解码器。
+- 输出 N 对应的解码器已经绑定到这个大屏。
+- 大屏规格和 `screen_width`、`screen_height` 对应，避免窗口坐标超出大屏范围。
+
+Web 控制台后端会在开窗前调用 `GetDispWallDecoderList` 做只读校验。如果大屏未绑定解码器，会直接返回明确错误，不再让问题落到 `sdk failed: -10`。

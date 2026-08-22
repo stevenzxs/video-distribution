@@ -5,9 +5,16 @@ from matrix_service import MatrixError, MatrixRuntimeState, MatrixScheduler, par
 
 
 class FakeAPIClient:
-    def __init__(self):
+    def __init__(self, bound_decoders=None):
         self.opened_windows = []
         self.logged_out = False
+        if bound_decoders is None:
+            bound_decoders = [
+                {"name": "显示器1", "ip": "192.168.130.61", "mac": "00-40-01-2b-06-27"},
+                {"name": "显示器2", "ip": "192.168.130.62", "mac": "00-40-01-2b-06-28"},
+                {"name": "终端摄像", "ip": "192.168.130.63", "mac": "00-40-01-2b-06-29"},
+            ]
+        self.bound_decoders = bound_decoders
 
     def login(self, username, password):
         return username == "admin" and bool(password)
@@ -43,6 +50,22 @@ class FakeAPIClient:
             "result": "success",
             "result_val": 0,
             "display_walls": [{"name": "矩阵大屏", "row": 1, "column": 3}],
+        }
+
+    def get_display_wall_info(self, name):
+        return {
+            "result": "success",
+            "result_val": 0,
+            "name": name,
+            "row": 1,
+            "column": 3,
+        }
+
+    def get_display_wall_decoder_list(self, display_wall):
+        return {
+            "result": "success",
+            "result_val": 0,
+            "decoders": self.bound_decoders,
         }
 
     def open_display_wall(self, name):
@@ -105,3 +128,16 @@ def test_scheduler_opens_expected_output_window():
     ]
     assert fake.logged_out is True
     assert route["stream"]["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
+
+
+def test_scheduler_reports_unbound_display_wall_before_open_wnd():
+    fake = FakeAPIClient(bound_decoders=[])
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    with pytest.raises(MatrixError, match="未绑定任何解码器"):
+        scheduler.switch_command("1v1.")
+
+    assert fake.opened_windows == []
