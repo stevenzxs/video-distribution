@@ -1,0 +1,18 @@
+[project]
+name = "video-distribution"
+version = "0.1.0"
+description = "分布式综合运维管理平台API测试工具"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31.0",
+    "pytest>=7.4.0",
+    "pytest-html>=4.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+]

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>分布式视频矩阵</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>分布式视频矩阵</h1>
+        <p id="serverStatus">正在读取资源配置</p>
+      </div>
+      <button class="ghost-button" id="refreshButton" type="button">刷新</button>
+    </header>
+
+    <main class="workspace">
+      <section class="screen-row" id="screenRow" aria-label="输出屏幕"></section>
+
+      <section class="matrix-band" aria-label="矩阵调度">
+        <div class="matrix-header">
+          <div>
+            <h2>矩阵调度</h2>
+            <p id="pendingCommand">等待选择输入和输出</p>
+          </div>
+          <div class="dispatch-state" id="dispatchState">空闲</div>
+        </div>
+
+        <div class="control-layout">
+          <div class="control-group">
+            <h3>输入</h3>
+            <div class="button-row" id="inputButtons"></div>
+          </div>
+
+          <div class="control-group">
+            <h3>输出</h3>
+            <div class="button-row" id="outputButtons"></div>
+          </div>
+        </div>
+
+        <div class="route-grid" id="routeGrid" aria-label="3x3 路由矩阵"></div>
+        <div class="history" id="history"></div>
+      </section>
+    </main>
+  </body>
+</html>
