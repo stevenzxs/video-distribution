@@ -28,11 +28,18 @@ DEVICES = {
 
 # 矩阵调度配置
 MATRIX_CONFIG = {
-    # 留空时后端会使用 API 返回的大屏列表中的第一个大屏。
-    "display_wall_name": "",
+    # 后端会确保该大屏存在；不存在时按输出解码器数量创建 1xN 大屏。
+    "display_wall_name": "视频矩阵大屏",
+    "auto_create_display_wall": True,
     # 1行3列大屏中单个输出窗口尺寸，位置会按输出序号横向排列。
     "screen_width": 1920,
     "screen_height": 1080,
+    "display_wall_row": 1,
+    "display_wall_factory": "",
+    "display_wall_com": "",
+    "display_wall_fusion_band": 0,
+    "display_wall_lcd_frame": 0,
+    "display_wall_border_clipping": 0,
     # WebSocket 取流通道后缀，文档示例为 MAC-00-01/v3。
     "stream_channel_suffix": "00-01/v3",
 }

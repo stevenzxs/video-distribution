@@ -249,6 +249,26 @@ class APIClient:
         data = {"name": name}
         return self._make_request("/mvapi/v1/displaywall/GetDisplayWallInfo", data)
 
+    def create_display_wall(self, name: str, row: int, column: int,
+                            resolution_x: int, resolution_y: int,
+                            factory: str = "", com: str = "",
+                            fusion_band: int = 0, lcd_frame: int = 0,
+                            border_clipping: int = 0) -> Dict[str, Any]:
+        """创建大屏幕墙"""
+        data = {
+            "name": name,
+            "row": row,
+            "column": column,
+            "resolution_x": resolution_x,
+            "resolution_y": resolution_y,
+            "factory": factory,
+            "com": com,
+            "fusion_band": fusion_band,
+            "lcd_frame": lcd_frame,
+            "border_clipping": border_clipping,
+        }
+        return self._make_request("/mvapi/v1/displaywall/CreateDisplayWall", data)
+
     def open_display_wall(self, name: str) -> Dict[str, Any]:
         """打开大屏"""
         data = {"name": name}

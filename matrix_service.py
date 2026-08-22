@@ -32,6 +32,7 @@ NAME_KEYS = (
     "decoder_name",
     "decoderName",
 )
+WALL_NAME_KEYS = ("name", "display_wall", "displayWall", "wall_name", "wallName")
 
 
 class MatrixError(Exception):
@@ -133,7 +134,10 @@ class MatrixScheduler:
         try:
             encoder = self._resolve_device(client, "encoder", parsed.input_index)
             output = self._resolve_device(client, "decoder", parsed.output_index)
-            display_wall = self._resolve_display_wall(client)
+            display_wall = self._ensure_display_wall(
+                client,
+                output_count=len(DEVICES.get("decoders", [])),
+            )
             self._validate_display_wall_output(
                 client,
                 display_wall,
@@ -208,27 +212,82 @@ class MatrixScheduler:
         merged["mac"] = _normalize_mac(mac)
         return _public_device(merged, index)
 
-    def _resolve_display_wall(self, client: APIClient) -> str:
-        configured_name = str(MATRIX_CONFIG.get("display_wall_name", "")).strip()
-        if configured_name:
-            return configured_name
+    def _ensure_display_wall(self, client: APIClient, output_count: int) -> str:
+        name = _target_display_wall_name(output_count)
+        wall = self._find_display_wall(client, name)
+        if wall:
+            info_result = client.get_display_wall_info(name)
+            if is_success_response(info_result):
+                return name
+            if info_result.get("result_val") != 13:
+                raise MatrixError(
+                    f"获取大屏 {name} 详情失败 {format_api_error(info_result)}",
+                    502,
+                )
 
+        if not MATRIX_CONFIG.get("auto_create_display_wall", True):
+            raise MatrixError(
+                f"大屏 {name} 不存在，请先在平台创建 1x{output_count} 大屏，"
+                "或开启 MATRIX_CONFIG.auto_create_display_wall",
+                502,
+            )
+
+        return self._create_display_wall(client, name, output_count)
+
+    def _find_display_wall(
+        self,
+        client: APIClient,
+        name: str,
+    ) -> Optional[Dict[str, Any]]:
         result = client.get_display_wall_list(page_index=1, page_size=20)
         if not is_success_response(result):
             raise MatrixError(f"获取大屏列表失败 {format_api_error(result)}", 502)
 
-        display_walls = result.get("display_walls", [])
-        if not display_walls:
+        for wall in _extract_display_wall_records(result):
+            if str(_first_value(wall, WALL_NAME_KEYS) or "").strip() == name:
+                return wall
+
+        return None
+
+    def _create_display_wall(
+        self,
+        client: APIClient,
+        name: str,
+        output_count: int,
+    ) -> str:
+        row = int(MATRIX_CONFIG.get("display_wall_row", 1) or 1)
+        column = max(1, _ceil_div(output_count, row))
+        screen_width = _even_int(MATRIX_CONFIG.get("screen_width", 1920))
+        screen_height = _even_int(MATRIX_CONFIG.get("screen_height", 1080))
+
+        create_result = client.create_display_wall(
+            name=name,
+            row=row,
+            column=column,
+            resolution_x=screen_width,
+            resolution_y=screen_height,
+            factory=str(MATRIX_CONFIG.get("display_wall_factory", "")),
+            com=str(MATRIX_CONFIG.get("display_wall_com", "")),
+            fusion_band=int(MATRIX_CONFIG.get("display_wall_fusion_band", 0) or 0),
+            lcd_frame=int(MATRIX_CONFIG.get("display_wall_lcd_frame", 0) or 0),
+            border_clipping=int(MATRIX_CONFIG.get("display_wall_border_clipping", 0) or 0),
+        )
+        if not is_success_response(create_result) and create_result.get("result_val") != 20:
             raise MatrixError(
-                "未找到可用大屏，请先在平台创建 1行3列大屏，或在 config.py "
-                "的 MATRIX_CONFIG.display_wall_name 中填写大屏名称",
+                f"创建大屏 {name} 失败 {format_api_error(create_result)}；"
+                f"创建参数: row={row}, column={column}, "
+                f"resolution={screen_width}x{screen_height}",
                 502,
             )
 
-        name = _first_value(display_walls[0], NAME_KEYS)
-        if not name:
-            raise MatrixError("API 返回的大屏缺少 name 字段", 502)
-        return str(name)
+        info_result = client.get_display_wall_info(name)
+        if not is_success_response(info_result):
+            raise MatrixError(
+                f"大屏 {name} 创建后仍无法获取详情 {format_api_error(info_result)}",
+                502,
+            )
+
+        return name
 
     def _validate_display_wall_output(
         self,
@@ -343,6 +402,13 @@ def _indexed_devices(devices: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [_public_device(device, index) for index, device in enumerate(devices, 1)]
 
 
+def _target_display_wall_name(output_count: int) -> str:
+    configured = str(MATRIX_CONFIG.get("display_wall_name", "")).strip()
+    if configured:
+        return configured
+    return f"视频矩阵大屏{output_count}"
+
+
 def _public_device(device: Dict[str, Any], index: int) -> Dict[str, Any]:
     return {
         "index": index,
@@ -378,6 +444,10 @@ def _first_value(data: Dict[str, Any], keys: Iterable[str]) -> Optional[Any]:
     return None
 
 
+def _ceil_div(value: int, divisor: int) -> int:
+    return -(-value // divisor)
+
+
 def _optional_int(value: Any) -> Optional[int]:
     try:
         return int(value)
@@ -403,6 +473,23 @@ def _extract_device_records(payload: Any) -> List[Dict[str, Any]]:
                 visit(child)
 
     visit(payload)
+    return records
+
+
+def _extract_display_wall_records(payload: Any) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            if _first_value(value, WALL_NAME_KEYS):
+                records.append(value)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload.get("display_walls", payload) if isinstance(payload, dict) else payload)
     return records
 
 
