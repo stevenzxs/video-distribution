@@ -6,6 +6,7 @@
 """
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -259,6 +260,7 @@ class MatrixScheduler:
         column = max(1, _ceil_div(output_count, row))
         screen_width = _even_int(MATRIX_CONFIG.get("screen_width", 1920))
         screen_height = _even_int(MATRIX_CONFIG.get("screen_height", 1080))
+        create_time = str(int(time.time()))
 
         create_result = client.create_display_wall(
             name=name,
@@ -266,6 +268,7 @@ class MatrixScheduler:
             column=column,
             resolution_x=screen_width,
             resolution_y=screen_height,
+            create_time=create_time,
             factory=str(MATRIX_CONFIG.get("display_wall_factory", "")),
             com=str(MATRIX_CONFIG.get("display_wall_com", "")),
             fusion_band=int(MATRIX_CONFIG.get("display_wall_fusion_band", 0) or 0),
@@ -276,7 +279,7 @@ class MatrixScheduler:
             raise MatrixError(
                 f"创建大屏 {name} 失败 {format_api_error(create_result)}；"
                 f"创建参数: row={row}, column={column}, "
-                f"resolution={screen_width}x{screen_height}",
+                f"resolution={screen_width}x{screen_height}, create_time={create_time}",
                 502,
             )
 

@@ -253,14 +253,19 @@ class APIClient:
                             resolution_x: int, resolution_y: int,
                             factory: str = "", com: str = "",
                             fusion_band: int = 0, lcd_frame: int = 0,
-                            border_clipping: int = 0) -> Dict[str, Any]:
+                            border_clipping: int = 0,
+                            create_time: Optional[Any] = None) -> Dict[str, Any]:
         """创建大屏幕墙"""
+        if create_time is None:
+            create_time = str(int(time.time()))
+
         data = {
             "name": name,
             "row": row,
             "column": column,
             "resolution_x": resolution_x,
             "resolution_y": resolution_y,
+            "create_time": create_time,
             "factory": factory,
             "com": com,
             "fusion_band": fusion_band,

@@ -69,13 +69,14 @@ class FakeAPIClient:
 
     def create_display_wall(self, name, row, column, resolution_x, resolution_y,
                             factory="", com="", fusion_band=0, lcd_frame=0,
-                            border_clipping=0):
+                            border_clipping=0, create_time=None):
         wall = {
             "name": name,
             "row": row,
             "column": column,
             "resolution_x": resolution_x,
             "resolution_y": resolution_y,
+            "create_time": create_time,
             "factory": factory,
             "com": com,
             "fusion_band": fusion_band,
@@ -178,18 +179,23 @@ def test_scheduler_creates_display_wall_before_open_wnd():
     route = scheduler.switch_command("1v1.")
 
     assert route["display_wall"] == "视频矩阵大屏"
-    assert fake.created_walls == [
-        {
-            "name": "视频矩阵大屏",
-            "row": 1,
-            "column": 3,
-            "resolution_x": 1920,
-            "resolution_y": 1080,
-            "factory": "",
-            "com": "",
-            "fusion_band": 0,
-            "lcd_frame": 0,
-            "border_clipping": 0,
-        }
-    ]
+    assert len(fake.created_walls) == 1
+    created_wall = fake.created_walls[0]
+    assert created_wall["create_time"].isdigit()
+    assert {
+        key: value
+        for key, value in created_wall.items()
+        if key != "create_time"
+    } == {
+        "name": "视频矩阵大屏",
+        "row": 1,
+        "column": 3,
+        "resolution_x": 1920,
+        "resolution_y": 1080,
+        "factory": "",
+        "com": "",
+        "fusion_band": 0,
+        "lcd_frame": 0,
+        "border_clipping": 0,
+    }
     assert fake.opened_windows[0]["display_wall"] == "视频矩阵大屏"

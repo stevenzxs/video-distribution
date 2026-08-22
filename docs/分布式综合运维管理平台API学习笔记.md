@@ -182,6 +182,7 @@
   - `name`: 大屏名称
   - `row`, `column`: 行列数
   - `resolution_x`, `resolution_y`: 分辨率
+  - `create_time`: 创建时间，平台创建大屏时要求携带；当前代码使用秒级 Unix 时间戳字符串
   - `factory`: 制造商（协议）
   - `com`: 控制方式
   - `fusion_band`: 前投影融合带
@@ -440,7 +441,7 @@
 
 如果 `GetDisplayWallInfo` 返回 `resource not exist`，说明目标大屏墙还没有创建
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，
-再继续绑定解码器和开窗。
+请求体需包含 `create_time`，再继续绑定解码器和开窗。
 
 ### 6.3 预案使用流程
 1. 配置好窗口布局
