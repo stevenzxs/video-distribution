@@ -151,6 +151,7 @@ class MatrixScheduler:
         with self._client_lock:
             client = self._authenticated_client()
             encoder = self._resolve_device(client, "encoder", parsed.input_index)
+            encoder = self._enrich_encoder_info(client, encoder, parsed.input_index)
             output = self._resolve_device(client, "decoder", parsed.output_index)
             display_wall = self._ensure_display_wall(
                 client,
@@ -163,7 +164,7 @@ class MatrixScheduler:
                 parsed.output_index,
             )
             logger.info(
-                "输入%d状态: name=%s, ip=%s, mac=%s, type=%s, status=%s, hdmi_status=%s",
+                "输入%d状态: name=%s, ip=%s, mac=%s, type=%s, status=%s, hdmi_status=%s, video_stream=%s",
                 parsed.input_index,
                 encoder.get("name"),
                 encoder.get("ip"),
@@ -171,6 +172,7 @@ class MatrixScheduler:
                 encoder.get("type"),
                 encoder.get("status"),
                 encoder.get("hdmi_status"),
+                _summarize_video_streams(encoder.get("video_stream")),
             )
             window = self._open_output_window(
                 client,
@@ -258,6 +260,41 @@ class MatrixScheduler:
 
         merged["mac"] = _normalize_mac(mac)
         return _public_device(merged, index)
+
+    def _enrich_encoder_info(
+        self,
+        client: APIClient,
+        encoder: Dict[str, Any],
+        input_index: int,
+    ) -> Dict[str, Any]:
+        mac = encoder.get("mac")
+        if not mac:
+            return encoder
+
+        result = client.get_encoder_info(mac)
+        if not is_success_response(result):
+            logger.warning(
+                "获取输入%d编码器详情失败 %s",
+                input_index,
+                format_api_error(result),
+            )
+            return encoder
+
+        info = _extract_encoder_info(result) or result
+        enriched = {**encoder}
+        for key in (
+            "type",
+            "status",
+            "hdmi_status",
+            "video_stream",
+            "video_encode_type",
+            "framerate",
+            "video_encode_delay",
+        ):
+            if key in info:
+                enriched[key] = info.get(key)
+
+        return _public_device(enriched, input_index)
 
     def _ensure_display_wall(self, client: APIClient, output_count: int) -> str:
         name = _target_display_wall_name(output_count)
@@ -655,6 +692,8 @@ def build_stream_descriptor(encoder: Dict[str, Any]) -> Dict[str, Any]:
     channel = _stream_channel(encoder["mac"])
     return {
         "ws_url": WS_BASE_URL,
+        "channel": channel,
+        "video_stream": encoder.get("video_stream", []),
         "open_header": {
             "a": "",
             "a2": encoder.get("name", ""),
@@ -702,9 +741,18 @@ def _public_device(device: Dict[str, Any], index: int) -> Dict[str, Any]:
         "ip": str(_first_value(device, IP_KEYS) or ""),
         "mac": str(_first_value(device, MAC_KEYS) or ""),
     }
-    for key in ("type", "status", "hdmi_status"):
+    for key in (
+        "type",
+        "status",
+        "hdmi_status",
+        "video_encode_type",
+        "framerate",
+        "video_encode_delay",
+    ):
         if key in device:
             public[key] = device.get(key)
+    if isinstance(device.get("video_stream"), list):
+        public["video_stream"] = _public_video_streams(device["video_stream"])
     return public
 
 
@@ -789,6 +837,26 @@ def _extract_display_wall_records(payload: Any) -> List[Dict[str, Any]]:
     return records
 
 
+def _extract_encoder_info(payload: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+    if "video_stream" in payload:
+        return payload
+
+    for value in payload.values():
+        if isinstance(value, dict):
+            found = _extract_encoder_info(value)
+            if found:
+                return found
+        elif isinstance(value, list):
+            for item in value:
+                found = _extract_encoder_info(item)
+                if found:
+                    return found
+
+    return None
+
+
 def _extract_window_records(payload: Any) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
 
@@ -870,6 +938,45 @@ def _summarize_devices(devices: Iterable[Dict[str, Any]]) -> str:
             labels.append("/".join(parts))
 
     return ", ".join(labels[:6]) if labels else "无"
+
+
+def _public_video_streams(streams: Any) -> List[Dict[str, Any]]:
+    if not isinstance(streams, list):
+        return []
+
+    public_streams = []
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        public_streams.append({
+            "identity": str(stream.get("identity", "")),
+            "codec_type": str(stream.get("codec_type", "")),
+            "framerate": _optional_int(stream.get("framerate")),
+            "bitrate": _optional_int(stream.get("bitrate")),
+            "image_quality": _optional_int(stream.get("image_quality")),
+        })
+    return public_streams
+
+
+def _summarize_video_streams(streams: Any) -> str:
+    public_streams = _public_video_streams(streams)
+    if not public_streams:
+        return "未知"
+
+    labels = []
+    for stream in public_streams:
+        identity = stream.get("identity") or "-"
+        codec = stream.get("codec_type") or "-"
+        framerate = stream.get("framerate")
+        bitrate = stream.get("bitrate")
+        parts = [identity, codec]
+        if framerate is not None:
+            parts.append(f"{framerate}fps")
+        if bitrate is not None:
+            parts.append(f"{bitrate}kbps")
+        labels.append("/".join(str(part) for part in parts))
+
+    return ", ".join(labels[:8])
 
 
 def _public_window(window: Dict[str, Any]) -> Dict[str, Any]:

@@ -95,6 +95,25 @@ class FakeAPIClient:
             ],
         }
 
+    def get_encoder_info(self, mac):
+        return {
+            "result": "success",
+            "result_val": 0,
+            "mac": mac,
+            "type": 23,
+            "status": 1,
+            "hdmi_status": 1,
+            "video_stream": [
+                {
+                    "identity": "main",
+                    "codec_type": "H264",
+                    "framerate": 30,
+                    "bitrate": 4096,
+                    "image_quality": 3,
+                }
+            ],
+        }
+
     def get_decoder_list(self, page_index=1, page_size=100):
         return {
             "result": "success",
@@ -377,6 +396,8 @@ def test_scheduler_opens_expected_output_window():
     assert fake.logged_out is False
     assert fake.login_count == 1
     assert route["stream"]["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
+    assert route["input"]["video_stream"][0]["codec_type"] == "H264"
+    assert route["stream"]["video_stream"][0]["identity"] == "main"
 
 
 def test_scheduler_reuses_login_for_consecutive_switches():

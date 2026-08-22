@@ -287,6 +287,9 @@ class PreviewReceiver {
     this.decodeDisabled = false;
     this.timestamp = 0;
     this.bytes = 0;
+    this.frames = 0;
+    this.lastFrame = null;
+    this.waitTimer = null;
   }
 
   start() {
@@ -300,17 +303,37 @@ class PreviewReceiver {
       this.ws.binaryType = "arraybuffer";
       this.ws.onopen = () => {
         this.ws.send(JSON.stringify(this.stream.open_header));
-        this.setStreamState("取流中");
+        this.setStreamState("等待码流");
+        this.drawState("等待码流", this.stream.channel || this.stream.open_header?.c || "");
+        this.waitTimer = window.setTimeout(() => {
+          if (!this.frames) {
+            this.drawState("未收到码流", this.stream.channel || this.stream.open_header?.c || "");
+            this.setStreamState("无码流");
+          }
+        }, 3000);
       };
       this.ws.onmessage = (event) => this.onMessage(event.data);
-      this.ws.onerror = () => this.setStreamState("取流异常");
-      this.ws.onclose = () => this.setStreamState("取流已断开");
+      this.ws.onerror = () => {
+        this.setStreamState("取流异常");
+        this.drawState("取流异常", this.stream.ws_url || "");
+      };
+      this.ws.onclose = () => {
+        this.setStreamState("取流已断开");
+        if (!this.frames) {
+          this.drawState("取流已断开", this.stream.channel || "");
+        }
+      };
     } catch (error) {
       this.drawState("取流失败", error.message);
     }
   }
 
   stop() {
+    if (this.waitTimer) {
+      window.clearTimeout(this.waitTimer);
+      this.waitTimer = null;
+    }
+
     if (this.decoder) {
       try {
         this.decoder.close();
@@ -333,6 +356,7 @@ class PreviewReceiver {
   onMessage(data) {
     if (typeof data === "string") {
       this.setStreamState(data.slice(0, 24));
+      this.drawState("取流消息", data.slice(0, 80));
       return;
     }
 
@@ -342,15 +366,35 @@ class PreviewReceiver {
       return;
     }
 
+    if (this.waitTimer) {
+      window.clearTimeout(this.waitTimer);
+      this.waitTimer = null;
+    }
+
     this.bytes += frame.payload.byteLength;
+    this.frames += 1;
+    this.lastFrame = frame;
+    if (frame.streamType !== 1) {
+      this.setStreamState(`收到${streamTypeName(frame.streamType)}`);
+      return;
+    }
+
     if (!this.tryDecode(frame)) {
       drawActivityPreview(this.canvas(), frame, this.bytes);
     }
-    this.setStreamState(`接收 ${formatBytes(this.bytes)}`);
+    this.setStreamState(
+      `接收 ${codecName(frame.codec)} ${frame.width || "-"}x${frame.height || "-"}`
+    );
   }
 
   tryDecode(frame) {
-    if (this.decodeDisabled || frame.codec !== 2 || !window.VideoDecoder) {
+    if (frame.codec === 3) {
+      this.decodeDisabled = true;
+      drawMessage(this.canvas(), "收到 H.265", "浏览器预览暂不支持，物理大屏仍按平台调度");
+      return true;
+    }
+
+    if (this.decodeDisabled || frame.codec !== 2 || !window.VideoDecoder || !window.EncodedVideoChunk) {
       return false;
     }
 
@@ -368,13 +412,16 @@ class PreviewReceiver {
           },
           error: () => {
             this.decodeDisabled = true;
+            drawActivityPreview(this.canvas(), frame, this.bytes, "H.264 解码失败");
           },
         });
-        this.decoder.configure({
+        const config = {
           codec: "avc1.42E01E",
           codedWidth: frame.width || 1920,
           codedHeight: frame.height || 1080,
-        });
+          avc: {format: "annexb"},
+        };
+        this.decoder.configure(config);
       } catch (error) {
         this.decodeDisabled = true;
         return false;
@@ -470,7 +517,7 @@ function drawMessage(canvas, title, detail) {
   ctx.fillText(detail || "", canvas.width / 2, canvas.height / 2 + 30);
 }
 
-function drawActivityPreview(canvas, frame, bytes) {
+function drawActivityPreview(canvas, frame, bytes, title = "收到码流") {
   if (!canvas) {
     return;
   }
@@ -495,7 +542,7 @@ function drawActivityPreview(canvas, frame, bytes) {
   ctx.fillStyle = "#e8edf2";
   ctx.font = "600 28px Microsoft YaHei, Segoe UI, Arial";
   ctx.textAlign = "left";
-  ctx.fillText(`${frame.width || "-"}x${frame.height || "-"}  ${codecName(frame.codec)}`, 28, 42);
+  ctx.fillText(`${title}  ${frame.width || "-"}x${frame.height || "-"}  ${codecName(frame.codec)}`, 28, 42);
   ctx.fillStyle = "#97a3b0";
   ctx.font = "20px Microsoft YaHei, Segoe UI, Arial";
   ctx.fillText(`码流 ${formatBytes(bytes)}`, 28, canvas.height - 20);
@@ -540,6 +587,16 @@ function codecName(codec) {
     return "H.265";
   }
   return `Codec ${codec}`;
+}
+
+function streamTypeName(type) {
+  if (type === 1) {
+    return "视频帧";
+  }
+  if (type === 2) {
+    return "音频帧";
+  }
+  return `类型${type}`;
 }
 
 function formatBytes(bytes) {
