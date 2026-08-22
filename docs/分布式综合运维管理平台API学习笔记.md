@@ -184,10 +184,16 @@
   - `resolution_x`, `resolution_y`: 分辨率
   - `create_time`: 创建时间，平台创建大屏时要求携带；当前代码使用秒级 Unix 时间戳字符串
   - `factory`: 制造商（协议）
-  - `com`: 控制方式
-  - `fusion_band`: 前投影融合带
-  - `lcd_frame`: 液晶边框
-  - `border_clipping`: 裁剪像素数
+  - `com`: 整数，控制方式；`-1` 表示可经解码器转发
+  - `fusion_band`: JSON对象，前投影融合带
+    - `width_x`: 横向融合带宽度
+    - `width_y`: 纵向融合带宽度
+  - `lcd_frame`: JSON对象，液晶边框
+    - `dot_pitch`: 点距
+    - `width_up`, `width_down`, `width_left`, `width_right`: 上、下、左、右边框宽度
+  - `border_clipping`: JSON对象，裁剪像素数
+    - `up`, `down`, `left`, `right`: 上、下、左、右裁剪像素
+  - `hfront`, `hback`, `vfront`, `vback`, `hwidth`, `vwidth`, `clock`: 自定义分辨率参数，不使用自定义分辨率时传 `0`
 
 #### 3.5.4 编辑大屏幕墙
 - **URL**: `POST /mvapi/v1/displaywall/EditDisplayWall`
@@ -441,7 +447,8 @@
 
 如果 `GetDisplayWallInfo` 返回 `resource not exist`，说明目标大屏墙还没有创建
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，
-请求体需包含 `create_time`，再继续绑定解码器和开窗。
+请求体需按接口类型传参：`com` 为整数，`fusion_band`、`lcd_frame`、
+`border_clipping` 为 JSON 对象，并包含 `create_time`，再继续绑定解码器和开窗。
 
 ### 6.3 预案使用流程
 1. 配置好窗口布局

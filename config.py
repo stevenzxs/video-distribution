@@ -36,10 +36,30 @@ MATRIX_CONFIG = {
     "screen_height": 1080,
     "display_wall_row": 1,
     "display_wall_factory": "",
-    "display_wall_com": "",
-    "display_wall_fusion_band": 0,
-    "display_wall_lcd_frame": 0,
-    "display_wall_border_clipping": 0,
+    # 控制方式，-1 表示可经解码器转发。
+    "display_wall_com": -1,
+    "display_wall_fusion_band": {"width_x": 0, "width_y": 0},
+    "display_wall_lcd_frame": {
+        "dot_pitch": 0.0,
+        "width_up": 0.0,
+        "width_down": 0.0,
+        "width_left": 0.0,
+        "width_right": 0.0,
+    },
+    "display_wall_border_clipping": {
+        "up": 0,
+        "down": 0,
+        "left": 0,
+        "right": 0,
+    },
+    # 自定义分辨率参数，不使用自定义分辨率时保持 0。
+    "display_wall_hfront": 0,
+    "display_wall_hback": 0,
+    "display_wall_vfront": 0,
+    "display_wall_vback": 0,
+    "display_wall_hwidth": 0,
+    "display_wall_vwidth": 0,
+    "display_wall_clock": 0,
     # WebSocket 取流通道后缀，文档示例为 MAC-00-01/v3。
     "stream_channel_suffix": "00-01/v3",
 }

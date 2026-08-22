@@ -270,10 +270,32 @@ class MatrixScheduler:
             resolution_y=screen_height,
             create_time=create_time,
             factory=str(MATRIX_CONFIG.get("display_wall_factory", "")),
-            com=str(MATRIX_CONFIG.get("display_wall_com", "")),
-            fusion_band=int(MATRIX_CONFIG.get("display_wall_fusion_band", 0) or 0),
-            lcd_frame=int(MATRIX_CONFIG.get("display_wall_lcd_frame", 0) or 0),
-            border_clipping=int(MATRIX_CONFIG.get("display_wall_border_clipping", 0) or 0),
+            com=_matrix_config_int("display_wall_com", -1),
+            fusion_band=_matrix_config_object(
+                "display_wall_fusion_band",
+                {"width_x": 0, "width_y": 0},
+            ),
+            lcd_frame=_matrix_config_object(
+                "display_wall_lcd_frame",
+                {
+                    "dot_pitch": 0.0,
+                    "width_up": 0.0,
+                    "width_down": 0.0,
+                    "width_left": 0.0,
+                    "width_right": 0.0,
+                },
+            ),
+            border_clipping=_matrix_config_object(
+                "display_wall_border_clipping",
+                {"up": 0, "down": 0, "left": 0, "right": 0},
+            ),
+            hfront=_matrix_config_int("display_wall_hfront", 0),
+            hback=_matrix_config_int("display_wall_hback", 0),
+            vfront=_matrix_config_int("display_wall_vfront", 0),
+            vback=_matrix_config_int("display_wall_vback", 0),
+            hwidth=_matrix_config_int("display_wall_hwidth", 0),
+            vwidth=_matrix_config_int("display_wall_vwidth", 0),
+            clock=_matrix_config_int("display_wall_clock", 0),
         )
         if not is_success_response(create_result) and create_result.get("result_val") != 20:
             raise MatrixError(
@@ -546,3 +568,30 @@ def _stream_channel(mac: str) -> str:
 def _even_int(value: Any) -> int:
     number = int(value)
     return number if number % 2 == 0 else number + 1
+
+
+def _matrix_config_int(key: str, default: int) -> int:
+    value = MATRIX_CONFIG.get(key, default)
+    if value in (None, ""):
+        return default
+
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise MatrixError(
+            f"MATRIX_CONFIG.{key} 必须是整数，当前值为 {value!r}",
+            500,
+        ) from exc
+
+
+def _matrix_config_object(key: str, default: Dict[str, Any]) -> Dict[str, Any]:
+    value = MATRIX_CONFIG.get(key, default)
+    if value in (None, "", 0):
+        return dict(default)
+    if not isinstance(value, dict):
+        raise MatrixError(
+            f"MATRIX_CONFIG.{key} 必须是 JSON 对象，当前值为 {value!r}",
+            500,
+        )
+
+    return {**default, **value}

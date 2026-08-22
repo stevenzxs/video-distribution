@@ -26,6 +26,57 @@ def format_api_error(result: Optional[Dict[str, Any]]) -> str:
     return f"[code:{result.get('result_val')}]: {result.get('result')}"
 
 
+def _int_or_default(value: Any, default: int = 0) -> int:
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_or_default(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _mapping_or_empty(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _fusion_band_payload(value: Any) -> Dict[str, int]:
+    data = _mapping_or_empty(value)
+    return {
+        "width_x": _int_or_default(data.get("width_x"), 0),
+        "width_y": _int_or_default(data.get("width_y"), 0),
+    }
+
+
+def _lcd_frame_payload(value: Any) -> Dict[str, float]:
+    data = _mapping_or_empty(value)
+    return {
+        "dot_pitch": _float_or_default(data.get("dot_pitch"), 0.0),
+        "width_up": _float_or_default(data.get("width_up"), 0.0),
+        "width_down": _float_or_default(data.get("width_down"), 0.0),
+        "width_left": _float_or_default(data.get("width_left"), 0.0),
+        "width_right": _float_or_default(data.get("width_right"), 0.0),
+    }
+
+
+def _border_clipping_payload(value: Any) -> Dict[str, int]:
+    data = _mapping_or_empty(value)
+    return {
+        "up": _int_or_default(data.get("up"), 0),
+        "down": _int_or_default(data.get("down"), 0),
+        "left": _int_or_default(data.get("left"), 0),
+        "right": _int_or_default(data.get("right"), 0),
+    }
+
+
 class APIClient:
     """分布式综合运维管理平台API客户端"""
 
@@ -251,9 +302,14 @@ class APIClient:
 
     def create_display_wall(self, name: str, row: int, column: int,
                             resolution_x: int, resolution_y: int,
-                            factory: str = "", com: str = "",
-                            fusion_band: int = 0, lcd_frame: int = 0,
-                            border_clipping: int = 0,
+                            factory: str = "", com: Any = -1,
+                            fusion_band: Optional[Dict[str, Any]] = None,
+                            lcd_frame: Optional[Dict[str, Any]] = None,
+                            border_clipping: Optional[Dict[str, Any]] = None,
+                            hfront: int = 0, hback: int = 0,
+                            vfront: int = 0, vback: int = 0,
+                            hwidth: int = 0, vwidth: int = 0,
+                            clock: int = 0,
                             create_time: Optional[Any] = None) -> Dict[str, Any]:
         """创建大屏幕墙"""
         if create_time is None:
@@ -261,16 +317,23 @@ class APIClient:
 
         data = {
             "name": name,
-            "row": row,
-            "column": column,
-            "resolution_x": resolution_x,
-            "resolution_y": resolution_y,
-            "create_time": create_time,
-            "factory": factory,
-            "com": com,
-            "fusion_band": fusion_band,
-            "lcd_frame": lcd_frame,
-            "border_clipping": border_clipping,
+            "row": _int_or_default(row, 1),
+            "column": _int_or_default(column, 1),
+            "resolution_x": _int_or_default(resolution_x, 1920),
+            "resolution_y": _int_or_default(resolution_y, 1080),
+            "create_time": str(create_time),
+            "factory": str(factory or ""),
+            "com": _int_or_default(com, -1),
+            "fusion_band": _fusion_band_payload(fusion_band),
+            "lcd_frame": _lcd_frame_payload(lcd_frame),
+            "border_clipping": _border_clipping_payload(border_clipping),
+            "hfront": _int_or_default(hfront, 0),
+            "hback": _int_or_default(hback, 0),
+            "vfront": _int_or_default(vfront, 0),
+            "vback": _int_or_default(vback, 0),
+            "hwidth": _int_or_default(hwidth, 0),
+            "vwidth": _int_or_default(vwidth, 0),
+            "clock": _int_or_default(clock, 0),
         }
         return self._make_request("/mvapi/v1/displaywall/CreateDisplayWall", data)
 

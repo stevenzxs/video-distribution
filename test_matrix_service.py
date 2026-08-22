@@ -1,7 +1,19 @@
 import pytest
 
-from api_client import is_success_response
+from api_client import APIClient, is_success_response
 from matrix_service import MatrixError, MatrixRuntimeState, MatrixScheduler, parse_matrix_command
+
+
+class CapturingAPIClient(APIClient):
+    def __init__(self):
+        super().__init__(base_url="http://example.invalid")
+        self.last_endpoint = None
+        self.last_data = None
+
+    def _make_request(self, endpoint, data=None, use_token=True):
+        self.last_endpoint = endpoint
+        self.last_data = data
+        return {"result": "success", "result_val": 0}
 
 
 class FakeAPIClient:
@@ -69,7 +81,9 @@ class FakeAPIClient:
 
     def create_display_wall(self, name, row, column, resolution_x, resolution_y,
                             factory="", com="", fusion_band=0, lcd_frame=0,
-                            border_clipping=0, create_time=None):
+                            border_clipping=0, hfront=0, hback=0,
+                            vfront=0, vback=0, hwidth=0, vwidth=0,
+                            clock=0, create_time=None):
         wall = {
             "name": name,
             "row": row,
@@ -82,6 +96,13 @@ class FakeAPIClient:
             "fusion_band": fusion_band,
             "lcd_frame": lcd_frame,
             "border_clipping": border_clipping,
+            "hfront": hfront,
+            "hback": hback,
+            "vfront": vfront,
+            "vback": vback,
+            "hwidth": hwidth,
+            "vwidth": vwidth,
+            "clock": clock,
         }
         self.display_walls.append(wall)
         self.created_walls.append(wall)
@@ -115,6 +136,47 @@ def test_api_success_uses_platform_success_shape():
     assert is_success_response({"result": "failed", "result_val": 0})
     assert not is_success_response({"result": "0", "result_val": "success"})
     assert not is_success_response({"result": 0, "result_val": "success"})
+
+
+def test_create_display_wall_payload_matches_platform_shape():
+    client = CapturingAPIClient()
+
+    client.create_display_wall(
+        name="视频矩阵大屏",
+        row=1,
+        column=3,
+        resolution_x=1920,
+        resolution_y=1080,
+        create_time=1787370000,
+    )
+
+    assert client.last_endpoint == "/mvapi/v1/displaywall/CreateDisplayWall"
+    assert client.last_data == {
+        "name": "视频矩阵大屏",
+        "row": 1,
+        "column": 3,
+        "resolution_x": 1920,
+        "resolution_y": 1080,
+        "create_time": "1787370000",
+        "factory": "",
+        "com": -1,
+        "fusion_band": {"width_x": 0, "width_y": 0},
+        "lcd_frame": {
+            "dot_pitch": 0.0,
+            "width_up": 0.0,
+            "width_down": 0.0,
+            "width_left": 0.0,
+            "width_right": 0.0,
+        },
+        "border_clipping": {"up": 0, "down": 0, "left": 0, "right": 0},
+        "hfront": 0,
+        "hback": 0,
+        "vfront": 0,
+        "vback": 0,
+        "hwidth": 0,
+        "vwidth": 0,
+        "clock": 0,
+    }
 
 
 def test_parse_matrix_command():
@@ -193,9 +255,22 @@ def test_scheduler_creates_display_wall_before_open_wnd():
         "resolution_x": 1920,
         "resolution_y": 1080,
         "factory": "",
-        "com": "",
-        "fusion_band": 0,
-        "lcd_frame": 0,
-        "border_clipping": 0,
+        "com": -1,
+        "fusion_band": {"width_x": 0, "width_y": 0},
+        "lcd_frame": {
+            "dot_pitch": 0.0,
+            "width_up": 0.0,
+            "width_down": 0.0,
+            "width_left": 0.0,
+            "width_right": 0.0,
+        },
+        "border_clipping": {"up": 0, "down": 0, "left": 0, "right": 0},
+        "hfront": 0,
+        "hback": 0,
+        "vfront": 0,
+        "vback": 0,
+        "hwidth": 0,
+        "vwidth": 0,
+        "clock": 0,
     }
     assert fake.opened_windows[0]["display_wall"] == "视频矩阵大屏"
