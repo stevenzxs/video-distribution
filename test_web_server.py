@@ -1,7 +1,12 @@
+import pytest
+
 from web_server import (
+    UpstreamWebSocket,
+    _call_preview_control_ws,
     _check_ws_handshake,
     _check_ws_handshakes,
     _parse_http_headers,
+    _parse_preview_control_payload,
     _preview_upstream_handshake_headers,
     _preview_output_from_query,
     _preview_event_needs_port_check,
@@ -16,6 +21,9 @@ def test_preview_event_summary_includes_key_fields():
     summary = _preview_event_summary({
         "output": 1,
         "event": "first_frame",
+        "control_ws_url": (
+            "ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81"
+        ),
         "ws_url": "ws://192.168.130.101:8003",
         "connect_url": "ws://127.0.0.1:8080/api/preview/ws?output=1",
         "channel": "6c-df-fb-01-5e-80-00-01/v1",
@@ -28,6 +36,7 @@ def test_preview_event_summary_includes_key_fields():
 
     assert "output=1" in summary
     assert "event=first_frame" in summary
+    assert "control_ws_url=ws://192.168.130.101:8003/?display_wall=" in summary
     assert "ws_url=ws://192.168.130.101:8003" in summary
     assert "connect_url=ws://127.0.0.1:8080/api/preview/ws?output=1" in summary
     assert "channel=6c-df-fb-01-5e-80-00-01/v1" in summary
@@ -88,13 +97,89 @@ def test_preview_output_from_query():
 def test_preview_stream_for_output_reads_current_assignment():
     state = {
         "screens": [
-            {"index": 1, "assignment": {"stream": {"ws_url": "ws://example.test:8003"}}},
+            {
+                "index": 1,
+                "assignment": {
+                    "stream": {
+                        "control_ws_url": "ws://example.test:8003/?display_wall=one",
+                        "ws_url": "ws://example.test:8003",
+                    }
+                },
+            },
             {"index": 2, "assignment": None},
         ]
     }
 
-    assert _preview_stream_for_output(state, 1) == {"ws_url": "ws://example.test:8003"}
+    assert _preview_stream_for_output(state, 1) == {
+        "control_ws_url": "ws://example.test:8003/?display_wall=one",
+        "ws_url": "ws://example.test:8003",
+    }
     assert _preview_stream_for_output(state, 2) == {}
+
+
+def test_parse_preview_control_payload_accepts_platform_success_shape():
+    assert _parse_preview_control_payload(
+        b'{"result":"success","result_val":0}'
+    ) == {"result": "success", "result_val": 0}
+
+
+def test_parse_preview_control_payload_rejects_non_json():
+    with pytest.raises(OSError, match="non-json"):
+        _parse_preview_control_payload(b"not json")
+
+
+def test_call_preview_control_ws_reads_success_json_frame(monkeypatch):
+    payload = b'{"result":"success","result_val":0}'
+    frame = b"\x81" + bytes([len(payload)]) + payload
+    sock = FakeSocket([frame])
+    calls = []
+
+    def fake_open(ws_url, origin, protocol, extensions="", user_agent=""):
+        calls.append({
+            "ws_url": ws_url,
+            "origin": origin,
+            "protocol": protocol,
+            "extensions": extensions,
+            "user_agent": user_agent,
+        })
+        return UpstreamWebSocket(sock=sock, headers={})
+
+    monkeypatch.setattr("web_server._open_upstream_websocket", fake_open)
+
+    result = _call_preview_control_ws(
+        "ws://example.test:8003/?display_wall=one",
+        origin="http://example.test:8001",
+        protocol="fake-token",
+        user_agent="FakeBrowser",
+    )
+
+    assert result == {"result": "success", "result_val": 0}
+    assert calls == [{
+        "ws_url": "ws://example.test:8003/?display_wall=one",
+        "origin": "http://example.test:8001",
+        "protocol": "fake-token",
+        "extensions": "",
+        "user_agent": "FakeBrowser",
+    }]
+    assert sock.timeout is not None
+    assert sock.closed
+
+
+def test_call_preview_control_ws_rejects_failed_result(monkeypatch):
+    payload = b'{"result":"failed","result_val":8}'
+    frame = b"\x81" + bytes([len(payload)]) + payload
+
+    def fake_open(*args, **kwargs):
+        return UpstreamWebSocket(sock=FakeSocket([frame]), headers={})
+
+    monkeypatch.setattr("web_server._open_upstream_websocket", fake_open)
+
+    with pytest.raises(OSError, match="result=failed"):
+        _call_preview_control_ws(
+            "ws://example.test:8003/?display_wall=one",
+            origin="http://example.test:8001",
+            protocol="fake-token",
+        )
 
 
 def test_websocket_accept_key_matches_rfc_example():
@@ -158,3 +243,25 @@ def test_parse_http_headers_lowercases_names():
 def test_protocol_requested_by_client():
     assert _protocol_requested_by_client("token-a, token-b", "token-b")
     assert not _protocol_requested_by_client("token-a", "token-b")
+
+
+class FakeSocket:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+        self.timeout = None
+        self.closed = False
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def recv(self, size):
+        if not self.chunks:
+            return b""
+        chunk = self.chunks.pop(0)
+        if len(chunk) <= size:
+            return chunk
+        self.chunks.insert(0, chunk[size:])
+        return chunk[:size]
+
+    def close(self):
+        self.closed = True

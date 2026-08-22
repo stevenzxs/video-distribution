@@ -17,9 +17,10 @@ import time
 from dataclasses import dataclass
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 from urllib.parse import parse_qs, unquote, urlparse
 
+from api_client import is_success_response
 from config import API_BASE_URL, LOG_FORMAT, LOG_LEVEL
 from matrix_service import MatrixError, MatrixScheduler, get_matrix_state
 
@@ -35,6 +36,7 @@ DEFAULT_PREVIEW_USER_AGENT = (
 PREVIEW_TCP_CONNECT_TIMEOUT_SECONDS = 3.0
 PREVIEW_UPSTREAM_HANDSHAKE_TIMEOUT_SECONDS = 20.0
 PREVIEW_DIAGNOSTIC_HANDSHAKE_TIMEOUT_SECONDS = 8.0
+PREVIEW_CONTROL_RESPONSE_TIMEOUT_SECONDS = 8.0
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -82,6 +84,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         upstream_url = str(stream.get("ws_url", ""))
+        control_url = str(stream.get("control_ws_url", ""))
         protocol = str(stream.get("ws_protocol", ""))
         client_protocol = self.headers.get("Sec-WebSocket-Protocol", "")
         client_extensions = self.headers.get("Sec-WebSocket-Extensions", "")
@@ -92,6 +95,19 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            if control_url:
+                control_result = _call_preview_control_ws(
+                    control_url,
+                    origin=API_BASE_URL,
+                    protocol=protocol,
+                    user_agent=user_agent,
+                )
+                logger.info(
+                    "预览视频调度确认: output=%s, url=%s, result=%s",
+                    output,
+                    control_url,
+                    _preview_control_result_summary(control_result),
+                )
             upstream = _open_upstream_websocket(
                 upstream_url,
                 origin=API_BASE_URL,
@@ -102,10 +118,11 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         except OSError as exc:
             logger.error(
                 (
-                    "预览代理连接上游失败: output=%s, url=%s, protocol=%s, "
+                    "预览代理连接上游失败: output=%s, control_url=%s, url=%s, protocol=%s, "
                     "extensions=%s, timeout=%ss, error=%s: %s"
                 ),
                 output,
+                control_url,
                 upstream_url,
                 "yes" if protocol else "no",
                 "yes" if client_extensions else "no",
@@ -272,6 +289,7 @@ def _preview_event_summary(payload: Dict[str, Any]) -> str:
     for key in (
         "output",
         "event",
+        "control_ws_url",
         "ws_url",
         "connect_url",
         "channel",
@@ -416,6 +434,64 @@ def _preview_stream_for_output(state: Dict[str, Any], output: int) -> Dict[str, 
     return {}
 
 
+def _call_preview_control_ws(
+    ws_url: str,
+    origin: str,
+    protocol: str,
+    user_agent: str = "",
+) -> Dict[str, Any]:
+    upstream = _open_upstream_websocket(
+        ws_url,
+        origin=origin,
+        protocol=protocol,
+        extensions="",
+        user_agent=user_agent or DEFAULT_PREVIEW_USER_AGENT,
+    )
+    try:
+        upstream.sock.settimeout(PREVIEW_CONTROL_RESPONSE_TIMEOUT_SECONDS)
+        frame_buffer = bytearray(upstream.initial_data)
+        for _ in range(5):
+            opcode, payload = _recv_ws_frame(upstream.sock, frame_buffer)
+            if opcode in (0x1, 0x2):
+                result = _parse_preview_control_payload(payload)
+                if not is_success_response(result):
+                    raise OSError(
+                        "preview control websocket returned "
+                        f"{_preview_control_result_summary(result)}"
+                    )
+                return result
+            if opcode == 0x8:
+                raise OSError("preview control websocket closed before result")
+
+        raise OSError("preview control websocket did not return a result frame")
+    except TimeoutError as exc:
+        raise TimeoutError("preview control websocket result timed out") from exc
+    finally:
+        try:
+            upstream.sock.close()
+        except OSError:
+            pass
+
+
+def _parse_preview_control_payload(payload: bytes) -> Dict[str, Any]:
+    text = payload.decode("utf-8", errors="replace").strip()
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise OSError(f"preview control websocket returned non-json: {text[:160]}") from exc
+    if not isinstance(result, dict):
+        raise OSError(f"preview control websocket returned non-object json: {text[:160]}")
+    return result
+
+
+def _preview_control_result_summary(result: Dict[str, Any]) -> str:
+    return ", ".join(
+        f"{key}={result.get(key)}"
+        for key in ("result", "result_val", "handle")
+        if key in result
+    ) or str(result)[:160]
+
+
 def _websocket_accept_key(key: str) -> str:
     digest = hashlib.sha1(f"{key}{WEBSOCKET_GUID}".encode("ascii")).digest()
     return base64.b64encode(digest).decode("ascii")
@@ -548,6 +624,41 @@ def _recv_http_headers(sock: socket.socket) -> Tuple[str, bytes]:
     if separator:
         header_bytes += separator
     return header_bytes.decode("iso-8859-1", errors="replace"), initial_data
+
+
+def _recv_ws_frame(
+    sock: socket.socket,
+    initial_data: Union[bytes, bytearray] = b"",
+) -> Tuple[int, bytes]:
+    buffer = initial_data if isinstance(initial_data, bytearray) else bytearray(initial_data)
+    header = _recv_buffered(sock, buffer, 2)
+    first_byte, second_byte = header[0], header[1]
+    opcode = first_byte & 0x0F
+    length = second_byte & 0x7F
+    masked = bool(second_byte & 0x80)
+    if length == 126:
+        length = int.from_bytes(_recv_buffered(sock, buffer, 2), "big")
+    elif length == 127:
+        length = int.from_bytes(_recv_buffered(sock, buffer, 8), "big")
+
+    mask = _recv_buffered(sock, buffer, 4) if masked else b""
+    payload = bytearray(_recv_buffered(sock, buffer, length))
+    if masked:
+        for index, value in enumerate(payload):
+            payload[index] = value ^ mask[index % 4]
+    return opcode, bytes(payload)
+
+
+def _recv_buffered(sock: socket.socket, buffer: bytearray, length: int) -> bytes:
+    while len(buffer) < length:
+        chunk = sock.recv(max(1024, length - len(buffer)))
+        if not chunk:
+            raise OSError("websocket connection closed")
+        buffer.extend(chunk)
+
+    data = bytes(buffer[:length])
+    del buffer[:length]
+    return data
 
 
 def _first_requested_protocol(value: str) -> str:

@@ -240,24 +240,25 @@ Web 控制台会复用一次登录获得的 token，不会在每次矩阵切换�
 2. `GetEncoderList` 获取编码器列表，按输入序号选择编码器。
 3. `GetDisplayWallList` 获取大屏列表，按输出序号选择大屏；参考 `docs/GetDisplayWallList.json`，输出 1/2/3 对应 `显示器1/显示器2/显示器3`。
 4. 调用 `/mvapi/v1/wnd/OpenWnd`，例如 `1v1.` 使用 `display_wall="显示器1"`、`pos_x=0`、`pos_y=0`、`width=1920`、`height=1080`。
-5. Web 页面通过本地 `/api/preview/ws?output=1` 代理获取视频流；代理连接上游
-   `ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81`，并使用登录 token 作为 `Sec-WebSocket-Protocol`。
+5. Web 页面通过本地 `/api/preview/ws?output=1` 代理预览视频。代理先调用
+   `ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81`
+   做视频调度确认，平台返回 `{"result":"success","result_val":0}` 后，再连接
+   `ws://192.168.130.101:8003`，由前端在取流连接上发送 `open_header` 取码流。
 
 如果物理大屏窗口已确认存在，但 Web 页面上方预览黑屏，重点看日志里的
-`输入N网页取流地址` 和 `输入N网页取流通道`。8003 取流地址需要携带当前大屏名，
-例如输出 1 应连接 `ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81`；
-只连接 `ws://192.168.130.101:8003` 会出现 TCP 可达但 WebSocket 握手超时。平台
-WebSocket 握手还需要 `Sec-WebSocket-Protocol` 携带当前登录 token，前端会使用
-本地 WebSocket 代理连接上游 8003，并把 `Origin` 固定为 API 服务地址
-`http://192.168.130.101:8001`。代理还会把浏览器请求中的
-`Sec-WebSocket-Extensions`、`User-Agent` 等握手头桥接到上游，保持与平台页面
-抓包的取流请求一致。
+`输入N视频调度地址`、`输入N网页取流地址` 和 `输入N网页取流通道`。8003 是
+视频调度确认地址，必须携带当前大屏名，例如输出 1 调用
+`ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81`；
+它返回的是 JSON 成功结果，不是视频帧。按 PDF 附录 17.1，真正取码流还是连接
+`ws://192.168.130.101:8003` 根地址，然后发送 `open_header`。平台 WebSocket
+握手还需要 `Sec-WebSocket-Protocol` 携带当前登录 token，后端代理会把 `Origin`
+固定为 API 服务地址 `http://192.168.130.101:8001`。
 平台有时会在编码器 MAC 中直接返回通道号，例如
 `6c-df-fb-01-5e-80-00-01`，此时 WebSocket 取流通道应为
 `6c-df-fb-01-5e-80-00-01/v3`，不能再拼成
 `6c-df-fb-01-5e-80-00-01-00-01/v3`。当前代码会自动识别这种 8 段 MAC。
 
-页面预览区会显示 WebSocket 取流状态：`未收到码流` 表示 8003 没有回帧；
+页面预览区会显示 WebSocket 取流状态：`未收到码流` 表示 8003 取流连接没有回帧；
 `收到 H.265` 表示浏览器预览暂不能直接解码该流；`H.264 解码失败` 表示已收到
 H.264 码流但浏览器 WebCodecs 解码失败。物理大屏和 Web 页面预览是两条链路，
 物理大屏有画面但页面提示上述状态时，应优先处理浏览器取流/编码兼容问题。
@@ -266,14 +267,11 @@ Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流�
 浏览器预览还会把诊断事件回传到本地后端日志，格式为
 `预览事件: output=1, event=first_frame, channel=...`，可用于确认哪个通道收到帧、
 收到的是 H.264 还是 H.265，以及最终是否解码成功。
-本地代理会等待上游 8003 WebSocket 握手最多 20 秒，前端连接等待 25 秒，
+本地代理会等待上游取流 WebSocket 握手最多 20 秒，前端连接等待 25 秒，
 避免平台取流服务响应较慢时被本地 5 秒超时提前断开；握手诊断日志会带
 `elapsed=...s` 便于判断实际等待时长。
 如果日志出现 `预览取流端口检查 ... status=tcp_failed`，说明本机连不上
 WebSocket 取流端口 `8003`，应检查服务器取流服务、防火墙或网络路由。
 如果 TCP 可达但 `预览取流握手检查` 显示 `handshake_timeout` 或
-`handshake_rejected`，说明 8003 端口不是正常响应浏览器 WebSocket Upgrade，
-需要继续查取流服务的 WebSocket 握手要求、Origin 限制或连接路径。后端会分别
-记录带 `Origin` 和不带 `Origin` 的握手结果：如果两者都是 `handshake_timeout`，
-通常不是跨域限制，而是该端口未按标准 WebSocket 握手响应当前连接地址；首先确认
-连接地址是否包含 `?display_wall=当前大屏名`。
+`handshake_rejected`，说明 8003 取流根地址没有按当前请求正常响应浏览器
+WebSocket Upgrade，需要继续查取流服务的 WebSocket 握手要求、Origin 限制或连接路径。

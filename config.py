@@ -8,8 +8,16 @@ API_SERVER_PORT = 8001
 API_BASE_URL = f"http://{API_SERVER_HOST}:{API_SERVER_PORT}"
 
 # WebSocket配置
-WS_SERVER_PORT = 8003
-WS_BASE_URL = f"ws://{API_SERVER_HOST}:{WS_SERVER_PORT}"
+# 8003 带 display_wall 查询参数时是平台页面调度大屏的控制 WebSocket，
+# 返回 {"result":"success","result_val":0}。
+WS_CONTROL_SERVER_PORT = 8003
+WS_CONTROL_BASE_URL = f"ws://{API_SERVER_HOST}:{WS_CONTROL_SERVER_PORT}"
+# PDF 附录 17.1 写明取码流也使用 8003，但连接根地址，发送 open_header 后返回帧。
+WS_STREAM_SERVER_PORT = 8003
+WS_STREAM_BASE_URL = f"ws://{API_SERVER_HOST}:{WS_STREAM_SERVER_PORT}"
+# 兼容旧代码引用：旧的 WS_BASE_URL 表示 8003 控制入口。
+WS_SERVER_PORT = WS_CONTROL_SERVER_PORT
+WS_BASE_URL = WS_CONTROL_BASE_URL
 
 # 设备配置
 DEVICES = {

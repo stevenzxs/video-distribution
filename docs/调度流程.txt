@@ -10,7 +10,7 @@ POST
     "token": "<登录token>"
 }
 
-视频流
+视频调度
 ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81
 请求头
 accept-encoding
@@ -39,6 +39,23 @@ upgrade
 websocket
 user-agent
 Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36
+
+返回
+{
+    "result": "success",
+    "result_val": 0
+}
+
+取码流
+ws://192.168.130.101:8003
+连接成功后发送：
+{
+    "a": "",
+    "a2": "输入1",
+    "c": "6c-df-fb-01-5e-80-00-01/v3",
+    "s": "http://192.168.130.101:8001",
+    "t": "open"
+}
 
 
 

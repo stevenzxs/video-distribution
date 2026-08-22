@@ -525,6 +525,7 @@ class PreviewReceiver {
     reportPreviewEvent({
       output: this.outputIndex,
       event,
+      control_ws_url: this.stream.control_ws_url || "",
       ws_url: this.stream.ws_url,
       connect_url: this.connectUrl || this.stream.ws_url,
       ws_protocol: this.stream.ws_protocol || "",

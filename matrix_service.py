@@ -13,7 +13,14 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from api_client import APIClient, format_api_error, is_success_response
-from config import API_BASE_URL, DEVICES, MATRIX_CONFIG, TEST_USER, WS_BASE_URL
+from config import (
+    API_BASE_URL,
+    DEVICES,
+    MATRIX_CONFIG,
+    TEST_USER,
+    WS_CONTROL_BASE_URL,
+    WS_STREAM_BASE_URL,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -108,9 +115,10 @@ class MatrixRuntimeState:
                 ),
                 "screen_width": MATRIX_CONFIG.get("screen_width", 1920),
                 "screen_height": MATRIX_CONFIG.get("screen_height", 1080),
-                "ws_url": _stream_ws_url(
+                "control_ws_url": _stream_control_ws_url(
                     _target_display_wall_name(len(DEVICES.get("decoders", []))),
                 ),
+                "ws_url": _stream_ws_url(),
             },
         }
 
@@ -179,6 +187,7 @@ class MatrixScheduler:
                 output_index=parsed.output_index,
                 ws_protocol=str(getattr(client, "token", "") or ""),
             )
+            logger.info("输入%d视频调度地址: %s", parsed.input_index, stream["control_ws_url"])
             logger.info("输入%d网页取流地址: %s", parsed.input_index, stream["ws_url"])
             logger.info(
                 "输入%d网页取流通道: %s",
@@ -869,7 +878,8 @@ def build_stream_descriptor(
         for candidate_channel in channels
     ]
     return {
-        "ws_url": _stream_ws_url(display_wall),
+        "control_ws_url": _stream_control_ws_url(display_wall),
+        "ws_url": _stream_ws_url(),
         "ws_proxy_path": f"/api/preview/ws?output={output_index}" if output_index else "",
         "ws_protocol": ws_protocol,
         "channel": channel,
@@ -1308,12 +1318,16 @@ def _stream_candidate_channels(mac: str) -> List[str]:
     return channels
 
 
-def _stream_ws_url(display_wall: str = "") -> str:
+def _stream_ws_url() -> str:
+    return WS_STREAM_BASE_URL
+
+
+def _stream_control_ws_url(display_wall: str = "") -> str:
     wall = str(display_wall or "").strip()
     if not wall:
         wall = _target_display_wall_name(len(DEVICES.get("decoders", [])))
 
-    parsed = urlparse(WS_BASE_URL)
+    parsed = urlparse(WS_CONTROL_BASE_URL)
     query = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
