@@ -500,6 +500,9 @@ Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流�
 如果 `candidate_failed` 发生在 0 帧阶段，后端会同步做一次 `ws_url` TCP 端口检查；
 `status=tcp_failed` 表示本机无法连接取流服务 8003，应优先检查取流服务、防火墙
 或网络路由。
+TCP 可达时还会做一次标准 WebSocket Upgrade 握手检查；`handshake_timeout`
+表示 8003 没有响应握手，`handshake_rejected` 表示服务端明确拒绝握手，
+需要继续检查取流服务的 WebSocket 协议、Origin 限制或连接路径。
 
 如果 `GetDisplayWallInfo` 返回 `resource not exist`，说明目标大屏墙还没有创建
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，

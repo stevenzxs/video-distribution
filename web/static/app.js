@@ -493,6 +493,8 @@ class PreviewReceiver {
     const nextIndex = this.candidateIndex + 1;
     this.report("candidate_failed", {reason});
     if (nextIndex >= this.candidates.length) {
+      this.closeDecoder();
+      this.closeActiveSocket();
       this.setStreamState(reason);
       const detail = currentChannel || this.stream.channel || "";
       if (reason === "收到 H.265") {

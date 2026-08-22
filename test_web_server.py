@@ -1,4 +1,8 @@
-from web_server import _preview_event_needs_port_check, _preview_event_summary
+from web_server import (
+    _check_ws_handshake,
+    _preview_event_needs_port_check,
+    _preview_event_summary,
+)
 
 
 def test_preview_event_summary_includes_key_fields():
@@ -34,3 +38,7 @@ def test_preview_event_needs_port_check_for_zero_frame_connection_failure():
         "reason": "H.264 解码失败",
         "frames": 1,
     })
+
+
+def test_check_ws_handshake_reports_invalid_url():
+    assert _check_ws_handshake("").endswith("status=invalid_url")

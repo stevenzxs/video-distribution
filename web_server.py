@@ -5,9 +5,11 @@
     python web_server.py --host 127.0.0.1 --port 8080
 """
 import argparse
+import base64
 import json
 import logging
 import mimetypes
+import os
 import socket
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -55,6 +57,11 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
                 logger.info(
                     "预览取流端口检查: %s",
                     _check_ws_port(str(payload.get("ws_url", ""))),
+                )
+                origin = f"http://{self.headers.get('Host')}" if self.headers.get("Host") else ""
+                logger.info(
+                    "预览取流握手检查: %s",
+                    _check_ws_handshake(str(payload.get("ws_url", "")), origin=origin),
                 )
             self._send_json({"result": "success", "result_val": 0})
             return
@@ -193,6 +200,52 @@ def _check_ws_port(ws_url: str) -> str:
             return f"url={ws_url}, status=tcp_ok"
     except OSError as exc:
         return f"url={ws_url}, status=tcp_failed, error={type(exc).__name__}: {exc}"
+
+
+def _check_ws_handshake(ws_url: str, origin: str = "") -> str:
+    parsed = urlparse(ws_url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    if not host:
+        return f"url={ws_url or '-'}, status=invalid_url"
+
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    headers = [
+        f"GET {path} HTTP/1.1",
+        f"Host: {host}:{port}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+    ]
+    if origin:
+        headers.append(f"Origin: {origin}")
+    request = "\r\n".join(headers) + "\r\n\r\n"
+
+    try:
+        with socket.create_connection((host, port), timeout=1.5) as sock:
+            sock.settimeout(2.0)
+            sock.sendall(request.encode("ascii"))
+            response = sock.recv(512).decode("iso-8859-1", errors="replace")
+    except socket.timeout:
+        return f"url={ws_url}, origin={origin or '-'}, status=handshake_timeout"
+    except OSError as exc:
+        return (
+            f"url={ws_url}, origin={origin or '-'}, status=handshake_failed, "
+            f"error={type(exc).__name__}: {exc}"
+        )
+
+    first_line = response.splitlines()[0] if response else ""
+    if " 101 " in f" {first_line} ":
+        status = "handshake_ok"
+    elif response:
+        status = "handshake_rejected"
+    else:
+        status = "handshake_empty"
+    return f"url={ws_url}, origin={origin or '-'}, status={status}, response={first_line[:160]}"
 
 
 def main() -> None:
