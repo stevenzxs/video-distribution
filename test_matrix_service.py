@@ -18,20 +18,40 @@ class CapturingAPIClient(APIClient):
 
 
 class FakeAPIClient:
-    def __init__(self, bound_decoders=None, display_walls=None):
+    def __init__(self, bound_decoders=None, display_walls=None, bind_result=None):
         self.opened_windows = []
         self.created_walls = []
+        self.bind_calls = []
         self.logged_out = False
+        self.bind_result = bind_result or {"result": "success", "result_val": 0}
         self.display_walls = display_walls
         if self.display_walls is None:
             self.display_walls = [{"name": "VW3", "row": 1, "column": 3}]
         if bound_decoders is None:
             bound_decoders = [
-                {"name": "显示器1", "ip": "192.168.130.61", "mac": "00-40-01-2b-06-27"},
-                {"name": "显示器2", "ip": "192.168.130.62", "mac": "00-40-01-2b-06-28"},
-                {"name": "终端摄像", "ip": "192.168.130.63", "mac": "00-40-01-2b-06-29"},
+                {
+                    "name": "显示器1",
+                    "ip": "192.168.130.61",
+                    "mac": "00-40-01-2b-06-27",
+                    "bind_x": 0,
+                    "bind_y": 0,
+                },
+                {
+                    "name": "显示器2",
+                    "ip": "192.168.130.62",
+                    "mac": "00-40-01-2b-06-28",
+                    "bind_x": 1,
+                    "bind_y": 0,
+                },
+                {
+                    "name": "终端摄像",
+                    "ip": "192.168.130.63",
+                    "mac": "00-40-01-2b-06-29",
+                    "bind_x": 2,
+                    "bind_y": 0,
+                },
             ]
-        self.bound_decoders = bound_decoders
+        self.bound_decoders = list(bound_decoders)
 
     def login(self, username, password):
         return username == "admin" and bool(password)
@@ -115,6 +135,27 @@ class FakeAPIClient:
             "result_val": 0,
             "decoders": self.bound_decoders,
         }
+
+    def bind_decoder(self, display_wall, mac, bind_x, bind_y):
+        payload = {
+            "display_wall": display_wall,
+            "mac": mac,
+            "bind_x": bind_x,
+            "bind_y": bind_y,
+        }
+        self.bind_calls.append(payload)
+        if not is_success_response(self.bind_result):
+            return self.bind_result
+
+        for decoder in self.get_decoder_list()["decoders"]:
+            if decoder["mac"] == mac:
+                self.bound_decoders.append({
+                    **decoder,
+                    "bind_x": bind_x,
+                    "bind_y": bind_y,
+                })
+                break
+        return self.bind_result
 
     def open_display_wall(self, name):
         return {"result": "success", "result_val": 0, "name": name}
@@ -204,6 +245,20 @@ def test_available_decoder_payload_matches_platform_shape():
     }
 
 
+def test_bind_decoder_payload_matches_platform_shape():
+    client = CapturingAPIClient()
+
+    client.bind_decoder("VW3", "00-40-01-2b-06-27", 0, 0)
+
+    assert client.last_endpoint == "/mvapi/v1/displaywall/BindDecoder"
+    assert client.last_data == {
+        "mac": "00-40-01-2b-06-27",
+        "name": "VW3",
+        "bind_x": 0,
+        "bind_y": 0,
+    }
+
+
 def test_parse_matrix_command():
     command = parse_matrix_command(" 1v3. ")
     assert command.input_index == 1
@@ -243,14 +298,38 @@ def test_scheduler_opens_expected_output_window():
     assert route["stream"]["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
 
 
-def test_scheduler_reports_unbound_display_wall_before_open_wnd():
+def test_scheduler_binds_unbound_display_wall_before_open_wnd():
     fake = FakeAPIClient(bound_decoders=[])
     scheduler = MatrixScheduler(
         client_factory=lambda: fake,
         runtime_state=MatrixRuntimeState(),
     )
 
-    with pytest.raises(MatrixError, match="未绑定任何解码器"):
+    route = scheduler.switch_command("1v1.")
+
+    assert route["display_wall"] == "VW3"
+    assert fake.bind_calls == [
+        {
+            "display_wall": "VW3",
+            "mac": "00-40-01-2b-06-27",
+            "bind_x": 0,
+            "bind_y": 0,
+        }
+    ]
+    assert fake.opened_windows[0]["display_wall"] == "VW3"
+
+
+def test_scheduler_reports_bind_failure_before_open_wnd():
+    fake = FakeAPIClient(
+        bound_decoders=[],
+        bind_result={"result": "config device failed", "result_val": 14},
+    )
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    with pytest.raises(MatrixError, match="绑定输出1解码器"):
         scheduler.switch_command("1v1.")
 
     assert fake.opened_windows == []

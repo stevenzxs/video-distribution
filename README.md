@@ -236,8 +236,7 @@ python web_server.py --host 127.0.0.1 --port 8080
 
 - `MATRIX_CONFIG["display_wall_name"]` 指向实际 1 行 3 列矩阵大屏。
 - 如果大屏不存在，后端会先调用 `CreateDisplayWall` 按输出解码器数量创建 1xN 大屏。
-- 该大屏已经绑定 3 个输出解码器。
-- 输出 N 对应的解码器已经绑定到这个大屏。
+- 后端会在开窗前检查当前输出解码器绑定关系；如果输出 N 未绑定，会调用 `BindDecoder` 绑定到对应位置。1 行 3 列时输出 1/2/3 对应 `(0,0)`、`(1,0)`、`(2,0)`。
 - 大屏规格和 `screen_width`、`screen_height` 对应，避免窗口坐标超出大屏范围。
 
-Web 控制台后端会在开窗前调用 `GetDispWallDecoderList` 做只读校验，请求体使用 `{"name": "<大屏名称>"}`。如果大屏未绑定解码器，会直接返回明确错误，不再让问题落到 `sdk failed: -10`。
+Web 控制台后端会在开窗前调用 `GetDispWallDecoderList` 检查绑定，请求体使用 `{"name": "<大屏名称>"}`。如果自动绑定失败，会直接返回明确错误，不再让问题落到 `sdk failed: -10`。

@@ -365,6 +365,17 @@ class APIClient:
         }
         return self._make_request("/mvapi/v1/displaywall/GetAvailableDecoder", data)
 
+    def bind_decoder(self, display_wall: str, mac: str, bind_x: int,
+                     bind_y: int) -> Dict[str, Any]:
+        """绑定视频解码器到大屏位置"""
+        data = {
+            "mac": mac,
+            "name": display_wall,
+            "bind_x": bind_x,
+            "bind_y": bind_y,
+        }
+        return self._make_request("/mvapi/v1/displaywall/BindDecoder", data)
+
     # ==================== 窗口操作API ====================
 
     def get_display_wall_wnds(self, display_wall: str) -> Dict[str, Any]:

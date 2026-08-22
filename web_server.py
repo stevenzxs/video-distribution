@@ -57,6 +57,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             routes = [self.scheduler.switch_command(command) for command in commands]
             self._send_json({"result": "success", "result_val": 0, "routes": routes})
         except MatrixError as exc:
+            logger.warning("矩阵切换失败: %s", exc)
             self._send_json(
                 {"result": str(exc), "result_val": 3, "routes": []},
                 exc.status_code,

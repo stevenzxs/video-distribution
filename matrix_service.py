@@ -4,6 +4,7 @@
 负责把前端的 1v1. 指令转换为平台 API 调度：
 输入 N 编码器 -> 输出 N 对应的大屏窗口位置。
 """
+import logging
 import re
 import threading
 import time
@@ -14,6 +15,7 @@ from api_client import APIClient, format_api_error, is_success_response
 from config import API_BASE_URL, DEVICES, MATRIX_CONFIG, TEST_USER, WS_BASE_URL
 
 
+logger = logging.getLogger(__name__)
 COMMAND_PATTERN = re.compile(r"^\s*([1-3])v([1-3])\.\s*$", re.IGNORECASE)
 MAC_KEYS = (
     "mac",
@@ -34,6 +36,8 @@ NAME_KEYS = (
     "decoderName",
 )
 WALL_NAME_KEYS = ("name", "display_wall", "displayWall", "wall_name", "wallName")
+BIND_X_KEYS = ("bind_x", "bindX")
+BIND_Y_KEYS = ("bind_y", "bindY")
 RESOURCE_NAME_MAX_BYTES = 16
 
 
@@ -131,6 +135,7 @@ class MatrixScheduler:
     def switch_command(self, command: str) -> Dict[str, Any]:
         parsed = parse_matrix_command(command)
         client = self.client_factory()
+        logger.info("矩阵指令 %s: 输入%d -> 输出%d", parsed.text, parsed.input_index, parsed.output_index)
 
         if not client.login(TEST_USER["username"], TEST_USER["password"]):
             raise MatrixError("登录 API 平台失败，请检查用户名、密码和服务器连接", 502)
@@ -142,7 +147,7 @@ class MatrixScheduler:
                 client,
                 output_count=len(DEVICES.get("decoders", [])),
             )
-            self._validate_display_wall_output(
+            self._ensure_display_wall_output(
                 client,
                 display_wall,
                 output,
@@ -164,6 +169,12 @@ class MatrixScheduler:
                 "stream": build_stream_descriptor(encoder),
             }
             self.runtime_state.record(parsed.output_index, route)
+            logger.info(
+                "矩阵指令 %s 已下发: %s -> %s",
+                parsed.text,
+                encoder.get("mac"),
+                output.get("mac"),
+            )
             return route
         finally:
             try:
@@ -318,24 +329,61 @@ class MatrixScheduler:
 
         return name
 
-    def _validate_display_wall_output(
+    def _ensure_display_wall_output(
         self,
         client: APIClient,
         display_wall: str,
         output: Dict[str, Any],
         output_index: int,
     ) -> None:
+        output_count = len(DEVICES.get("decoders", []))
+        row = int(MATRIX_CONFIG.get("display_wall_row", 1) or 1)
+        column = max(1, _ceil_div(output_count, row))
+
         info_result = client.get_display_wall_info(display_wall)
         if is_success_response(info_result):
-            row = _optional_int(info_result.get("row"))
-            column = _optional_int(info_result.get("column"))
-            if row and column and output_index > row * column:
+            wall_row = _optional_int(info_result.get("row"))
+            wall_column = _optional_int(info_result.get("column"))
+            if wall_row:
+                row = wall_row
+            if wall_column:
+                column = wall_column
+            if output_index > row * column:
                 raise MatrixError(
                     f"输出{output_index}超出大屏 {display_wall} 的规格 "
                     f"{row}x{column}",
                     502,
                 )
 
+        bind_x, bind_y = _bind_position(output_index, column)
+        bound_decoders = self._get_bound_decoders(client, display_wall)
+        if _device_record_matches_at_position(output, bound_decoders, bind_x, bind_y):
+            return
+
+        self._bind_decoder_to_output(
+            client,
+            display_wall,
+            output,
+            output_index,
+            bind_x,
+            bind_y,
+        )
+
+        bound_decoders = self._get_bound_decoders(client, display_wall)
+        if not _device_record_matches_at_position(output, bound_decoders, bind_x, bind_y):
+            bound_summary = _summarize_devices(bound_decoders)
+            raise MatrixError(
+                f"输出{output_index}对应的解码器 {output.get('name')} "
+                f"({output.get('ip') or output.get('mac')}) 未绑定到大屏 {display_wall} "
+                f"位置({bind_x},{bind_y})。当前已绑定: {bound_summary}",
+                502,
+            )
+
+    def _get_bound_decoders(
+        self,
+        client: APIClient,
+        display_wall: str,
+    ) -> List[Dict[str, Any]]:
         bound_result = client.get_display_wall_decoder_list(display_wall)
         if not is_success_response(bound_result):
             raise MatrixError(
@@ -344,21 +392,40 @@ class MatrixScheduler:
                 502,
             )
 
-        bound_decoders = _extract_device_records(bound_result)
-        if not bound_decoders:
-            raise MatrixError(
-                f"大屏 {display_wall} 未绑定任何解码器，OpenWnd 会被底层 SDK 拒绝。"
-                "请先在平台将 3 个输出解码器绑定到该大屏，或在 config.py 的 "
-                "MATRIX_CONFIG.display_wall_name 指定已经完成绑定的 1x3 大屏。",
-                502,
-            )
+        return _extract_device_records(bound_result)
 
-        if not _device_record_matches(output, bound_decoders):
-            bound_summary = _summarize_devices(bound_decoders)
+    def _bind_decoder_to_output(
+        self,
+        client: APIClient,
+        display_wall: str,
+        output: Dict[str, Any],
+        output_index: int,
+        bind_x: int,
+        bind_y: int,
+    ) -> None:
+        mac = output.get("mac")
+        if not mac:
+            raise MatrixError(f"输出{output_index}缺少解码器 MAC，无法绑定到大屏", 502)
+
+        logger.info(
+            "绑定输出%d解码器到大屏 %s: mac=%s, bind_x=%d, bind_y=%d",
+            output_index,
+            display_wall,
+            mac,
+            bind_x,
+            bind_y,
+        )
+        result = client.bind_decoder(
+            display_wall=display_wall,
+            mac=mac,
+            bind_x=bind_x,
+            bind_y=bind_y,
+        )
+        if not is_success_response(result):
             raise MatrixError(
-                f"输出{output_index}对应的解码器 {output.get('name')} "
-                f"({output.get('ip') or output.get('mac')}) 未绑定到大屏 {display_wall}。"
-                f"当前已绑定: {bound_summary}",
+                f"绑定输出{output_index}解码器到大屏 {display_wall} 失败 "
+                f"{format_api_error(result)}；绑定参数: "
+                f"name={display_wall}, mac={mac}, bind_x={bind_x}, bind_y={bind_y}",
                 502,
             )
 
@@ -381,6 +448,15 @@ class MatrixScheduler:
                 502,
             )
 
+        logger.info(
+            "开窗: display_wall=%s, src_mac=%s, pos=(%d,%d), size=%dx%d",
+            display_wall,
+            src_mac,
+            pos_x,
+            pos_y,
+            screen_width,
+            screen_height,
+        )
         result = client.open_wnd(
             display_wall=display_wall,
             src_mac=src_mac,
@@ -489,6 +565,12 @@ def _ceil_div(value: int, divisor: int) -> int:
     return -(-value // divisor)
 
 
+def _bind_position(output_index: int, column: int) -> tuple[int, int]:
+    safe_column = max(1, column)
+    zero_based_index = output_index - 1
+    return zero_based_index % safe_column, zero_based_index // safe_column
+
+
 def _optional_int(value: Any) -> Optional[int]:
     try:
         return int(value)
@@ -534,27 +616,43 @@ def _extract_display_wall_records(payload: Any) -> List[Dict[str, Any]]:
     return records
 
 
-def _device_record_matches(
+def _device_record_matches_at_position(
     expected: Dict[str, Any],
     candidates: Iterable[Dict[str, Any]],
+    bind_x: int,
+    bind_y: int,
 ) -> bool:
+    return any(
+        _device_matches_record(expected, candidate)
+        and _record_position_matches(candidate, bind_x, bind_y)
+        for candidate in candidates
+    )
+
+
+def _device_matches_record(expected: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     expected_mac = _normalize_mac(expected.get("mac", ""))
     expected_ip = str(expected.get("ip", "")).strip()
     expected_name = str(expected.get("name", "")).strip()
 
-    for candidate in candidates:
-        candidate_mac = _normalize_mac(_first_value(candidate, MAC_KEYS) or "")
-        candidate_ip = str(_first_value(candidate, IP_KEYS) or "").strip()
-        candidate_name = str(_first_value(candidate, NAME_KEYS) or "").strip()
+    candidate_mac = _normalize_mac(_first_value(candidate, MAC_KEYS) or "")
+    candidate_ip = str(_first_value(candidate, IP_KEYS) or "").strip()
+    candidate_name = str(_first_value(candidate, NAME_KEYS) or "").strip()
 
-        if expected_mac and candidate_mac and expected_mac == candidate_mac:
-            return True
-        if expected_ip and candidate_ip and expected_ip == candidate_ip:
-            return True
-        if expected_name and candidate_name and expected_name == candidate_name:
-            return True
+    if expected_mac and candidate_mac and expected_mac == candidate_mac:
+        return True
+    if expected_ip and candidate_ip and expected_ip == candidate_ip:
+        return True
+    if expected_name and candidate_name and expected_name == candidate_name:
+        return True
 
     return False
+
+
+def _record_position_matches(candidate: Dict[str, Any], bind_x: int, bind_y: int) -> bool:
+    return (
+        _optional_int(_first_value(candidate, BIND_X_KEYS)) == bind_x
+        and _optional_int(_first_value(candidate, BIND_Y_KEYS)) == bind_y
+    )
 
 
 def _summarize_devices(devices: Iterable[Dict[str, Any]]) -> str:
@@ -563,7 +661,11 @@ def _summarize_devices(devices: Iterable[Dict[str, Any]]) -> str:
         name = _first_value(device, NAME_KEYS)
         ip = _first_value(device, IP_KEYS)
         mac = _first_value(device, MAC_KEYS)
+        bind_x = _first_value(device, BIND_X_KEYS)
+        bind_y = _first_value(device, BIND_Y_KEYS)
         parts = [str(item) for item in (name, ip, mac) if item]
+        if bind_x not in (None, "") and bind_y not in (None, ""):
+            parts.append(f"pos=({bind_x},{bind_y})")
         if parts:
             labels.append("/".join(parts))
 

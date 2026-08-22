@@ -216,6 +216,8 @@
 
 #### 3.5.7 大屏绑定解码器
 - **绑定视频解码器**: `/mvapi/v1/displaywall/BindDecoder`
+  - 请求参数：`mac`, `name`, `bind_x`, `bind_y`
+  - `name` 为大屏名称，`bind_x/bind_y` 为解码器绑定到大屏的列/行位置；1行3列时输出1/2/3分别为 `(0,0)`, `(1,0)`, `(2,0)`
 - **绑定音频解码器**: `/mvapi/v1/displaywall/BindAudioDecoder`
 - **解绑解码器**: `/mvapi/v1/displaywall/UnBindDecoder`
 - **获取可用解码器**: `/mvapi/v1/displaywall/GetAvailableDecoder`
@@ -445,7 +447,7 @@
 
 ### 6.2 大屏显示流程
 1. 按输出解码器数量创建或选择大屏，例如 3 个解码器创建 1 行 3 列大屏
-2. 绑定解码器到大屏
+2. 确保当前输出对应的解码器绑定到大屏位置，例如 `1v1.` 会把输出1解码器绑定到 `(0,0)`
 3. 打开大屏
 4. 开窗显示信号源
 5. 调整窗口位置和大小
@@ -454,6 +456,9 @@
 `sdk failed: -10`，优先检查当前大屏是否已经绑定解码器，以及开窗坐标
 是否落在已绑定解码器对应的屏幕范围内。未绑定解码器、选错大屏或坐标
 超出大屏规格，都会导致底层 SDK 拒绝开窗。
+当前矩阵控制台会在开窗前调用 `GetDispWallDecoderList` 检查绑定关系；
+如果输出 N 对应的解码器没有绑定到对应位置，会先调用 `BindDecoder`
+自动绑定，再执行 `OpenDisplayWall` 和 `OpenWnd`。
 
 如果 `GetDisplayWallInfo` 返回 `resource not exist`，说明目标大屏墙还没有创建
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，
