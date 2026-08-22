@@ -483,11 +483,14 @@ Web 矩阵控制台在进程内复用 API 登录会话，不在每次 `1v1.`、`
 如果日志报 `窗口列表里没有发现输出N的目标窗口`，说明平台虽然返回 `OpenWnd`
 成功，但实际窗口没有生成或没有落到期望位置，需要继续排查大屏配置和平台窗口调度。
 
-Web 页面上方预览使用 WebSocket 另走取流链路。文档示例中的 6 段物理 MAC
-需要拼成 `MAC-00-01/v3`；但实测 `GetEncoderList` 也可能直接返回已经包含
+Web 页面上方预览使用 WebSocket 另走取流链路。实测 8003 取流地址需要携带当前
+大屏名，例如 `ws://192.168.130.101:8003/?display_wall=VW3`；只连接
+`ws://192.168.130.101:8003` 会出现 TCP 可达但 WebSocket 握手超时。文档示例
+中的 6 段物理 MAC 需要拼成 `MAC-00-01/v3`；但实测 `GetEncoderList` 也可能直接返回已经包含
 通道号的 8 段 MAC，例如 `6c-df-fb-01-5e-80-00-01`。这种情况下取流通道应为
 `6c-df-fb-01-5e-80-00-01/v3`，不能重复拼接 `-00-01/v3`。
-当前矩阵控制台会自动识别，并在日志中输出 `输入N网页取流通道` 便于核对。
+当前矩阵控制台会自动识别，并在日志中输出 `输入N网页取流地址` 和
+`输入N网页取流通道` 便于核对。
 后端会额外读取 `GetEncoderInfo` 的 `video_stream` 字段并打印流编码，页面预览
 也会直接显示 `未收到码流`、`收到 H.265`、`H.264 解码失败` 等状态，用来区分
 取流失败、浏览器编码兼容问题和真实视频内容黑屏。
@@ -504,7 +507,8 @@ TCP 可达时还会做一次标准 WebSocket Upgrade 握手检查；`handshake_t
 表示 8003 没有响应握手，`handshake_rejected` 表示服务端明确拒绝握手，
 需要继续检查取流服务的 WebSocket 协议、Origin 限制或连接路径。后端会分别记录
 带 `Origin` 与不带 `Origin` 的握手结果；如果两者都超时，优先检查 8003 的实际
-WebSocket 入口、path/query/subprotocol 或取流服务状态。
+WebSocket 入口、path/query/subprotocol 或取流服务状态，其中首先确认地址是否包含
+`?display_wall=当前大屏名`。
 
 如果 `GetDisplayWallInfo` 返回 `resource not exist`，说明目标大屏墙还没有创建
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，

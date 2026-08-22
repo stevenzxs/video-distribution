@@ -353,11 +353,15 @@ def test_parse_matrix_command_rejects_invalid_shape():
 
 
 def test_stream_channel_appends_default_suffix_to_physical_mac():
-    stream = build_stream_descriptor({
-        "name": "输入1",
-        "mac": "00-40-01-2b-05-27",
-    })
+    stream = build_stream_descriptor(
+        {
+            "name": "输入1",
+            "mac": "00-40-01-2b-05-27",
+        },
+        display_wall="VW3",
+    )
 
+    assert stream["ws_url"] == "ws://192.168.130.101:8003/?display_wall=VW3"
     assert stream["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
     assert [
         candidate["open_header"]["c"]
@@ -412,6 +416,7 @@ def test_scheduler_opens_expected_output_window():
     assert fake.logged_out is False
     assert fake.login_count == 1
     assert route["stream"]["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
+    assert route["stream"]["ws_url"] == "ws://192.168.130.101:8003/?display_wall=VW3"
     assert route["input"]["video_stream"][0]["codec_type"] == "H264"
     assert route["stream"]["video_stream"][0]["identity"] == "main"
 

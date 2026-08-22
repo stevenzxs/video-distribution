@@ -10,6 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from api_client import APIClient, format_api_error, is_success_response
 from config import API_BASE_URL, DEVICES, MATRIX_CONFIG, TEST_USER, WS_BASE_URL
@@ -107,7 +108,9 @@ class MatrixRuntimeState:
                 ),
                 "screen_width": MATRIX_CONFIG.get("screen_width", 1920),
                 "screen_height": MATRIX_CONFIG.get("screen_height", 1080),
-                "ws_url": WS_BASE_URL,
+                "ws_url": _stream_ws_url(
+                    _target_display_wall_name(len(DEVICES.get("decoders", []))),
+                ),
             },
         }
 
@@ -180,7 +183,8 @@ class MatrixScheduler:
                 encoder["mac"],
                 parsed.output_index,
             )
-            stream = build_stream_descriptor(encoder)
+            stream = build_stream_descriptor(encoder, display_wall=display_wall)
+            logger.info("输入%d网页取流地址: %s", parsed.input_index, stream["ws_url"])
             logger.info(
                 "输入%d网页取流通道: %s",
                 parsed.input_index,
@@ -695,7 +699,10 @@ class MatrixScheduler:
         )
 
 
-def build_stream_descriptor(encoder: Dict[str, Any]) -> Dict[str, Any]:
+def build_stream_descriptor(
+    encoder: Dict[str, Any],
+    display_wall: str = "",
+) -> Dict[str, Any]:
     """生成浏览器连接取流 WebSocket 需要的信息。"""
     channel = _stream_channel(encoder["mac"])
     channels = _stream_candidate_channels(encoder["mac"])
@@ -704,7 +711,7 @@ def build_stream_descriptor(encoder: Dict[str, Any]) -> Dict[str, Any]:
         for candidate_channel in channels
     ]
     return {
-        "ws_url": WS_BASE_URL,
+        "ws_url": _stream_ws_url(display_wall),
         "channel": channel,
         "candidates": candidates,
         "video_stream": encoder.get("video_stream", []),
@@ -1128,6 +1135,24 @@ def _stream_candidate_channels(mac: str) -> List[str]:
             channels.append(channel)
 
     return channels
+
+
+def _stream_ws_url(display_wall: str = "") -> str:
+    wall = str(display_wall or "").strip()
+    if not wall:
+        wall = _target_display_wall_name(len(DEVICES.get("decoders", [])))
+
+    parsed = urlparse(WS_BASE_URL)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != "display_wall"
+    ]
+    if wall:
+        query.append(("display_wall", wall))
+
+    path = parsed.path or "/"
+    return urlunparse(parsed._replace(path=path, query=urlencode(query)))
 
 
 def _stream_headers(encoder: Dict[str, Any], channel: str) -> Dict[str, Any]:
