@@ -482,6 +482,33 @@ def test_scheduler_closes_existing_output_window_before_open_wnd():
     assert route["window"]["verified_windows"][0]["src_mac"] == "00-40-01-2b-05-27"
 
 
+def test_scheduler_reuses_existing_same_source_output_window():
+    fake = FakeAPIClient(windows=[
+        {
+            "src_mac": "00-40-01-2b-05-27",
+            "src_name": "视频会议终端",
+            "src_status": 1,
+            "handle": 994,
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080,
+            "layer": 1,
+        }
+    ])
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    route = scheduler.switch_command("1v1.")
+
+    assert fake.closed_windows == []
+    assert fake.opened_windows == []
+    assert route["window"]["result"]["reused"] is True
+    assert route["window"]["verified_windows"][0]["handle"] == 994
+
+
 def test_scheduler_reports_open_wnd_success_without_window_state():
     fake = FakeAPIClient(record_opened_window=False)
     scheduler = MatrixScheduler(

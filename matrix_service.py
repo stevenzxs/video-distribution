@@ -181,6 +181,7 @@ class MatrixScheduler:
                 client,
                 display_wall,
                 encoder["mac"],
+                str(encoder.get("name") or ""),
                 parsed.output_index,
             )
             stream = build_stream_descriptor(encoder, display_wall=display_wall)
@@ -515,6 +516,7 @@ class MatrixScheduler:
         client: APIClient,
         display_wall: str,
         src_mac: str,
+        src_name: str,
         output_index: int,
     ) -> Dict[str, Any]:
         screen_width = _even_int(MATRIX_CONFIG.get("screen_width", 1920))
@@ -530,6 +532,48 @@ class MatrixScheduler:
             )
 
         existing_windows = self._get_display_wall_windows(client, display_wall)
+        reusable_windows = [
+            window for window in existing_windows
+            if _window_rect_matches(window, pos_x, pos_y, screen_width, screen_height)
+            and _window_source_matches(window, src_mac, src_name)
+        ]
+        if reusable_windows:
+            kept_window = reusable_windows[0]
+            extra_windows = [
+                window for window in existing_windows
+                if id(window) != id(kept_window)
+                and _window_overlaps(window, pos_x, pos_y, screen_width, screen_height)
+            ]
+            closed_windows = self._close_output_windows(
+                client,
+                display_wall,
+                output_index,
+                extra_windows,
+                pos_x,
+                pos_y,
+                screen_width,
+                screen_height,
+            )
+            logger.info(
+                "输出%d已存在目标窗口，复用: %s",
+                output_index,
+                _summarize_window(kept_window),
+            )
+            return {
+                "pos_x": pos_x,
+                "pos_y": pos_y,
+                "width": screen_width,
+                "height": screen_height,
+                "result": {
+                    "result": "success",
+                    "result_val": 0,
+                    "reused": True,
+                    "handle": _optional_int(_first_value(kept_window, WINDOW_HANDLE_KEYS)),
+                },
+                "closed_windows": closed_windows,
+                "verified_windows": [_public_window(kept_window)],
+            }
+
         closed_windows = self._close_output_windows(
             client,
             display_wall,
@@ -1020,6 +1064,17 @@ def _window_matches_output(
     window_src_mac = _normalize_mac(_first_value(window, MAC_KEYS) or "")
     expected_src_mac = _normalize_mac(src_mac)
     return not window_src_mac or window_src_mac == expected_src_mac
+
+
+def _window_source_matches(window: Dict[str, Any], src_mac: str, src_name: str = "") -> bool:
+    window_src_mac = _normalize_mac(_first_value(window, MAC_KEYS) or "")
+    expected_src_mac = _normalize_mac(src_mac)
+    if window_src_mac and expected_src_mac:
+        return window_src_mac == expected_src_mac
+
+    window_src_name = str(_first_value(window, WINDOW_SRC_NAME_KEYS) or "").strip()
+    expected_src_name = str(src_name or "").strip()
+    return bool(window_src_name and expected_src_name and window_src_name == expected_src_name)
 
 
 def _window_rect_matches(
