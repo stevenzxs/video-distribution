@@ -359,6 +359,14 @@ def test_stream_channel_appends_default_suffix_to_physical_mac():
     })
 
     assert stream["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
+    assert [
+        candidate["open_header"]["c"]
+        for candidate in stream["candidates"]
+    ] == [
+        "00-40-01-2b-05-27-00-01/v3",
+        "00-40-01-2b-05-27-00-01/v1",
+        "00-40-01-2b-05-27-00-01/v2",
+    ]
 
 
 def test_stream_channel_keeps_api_mac_with_embedded_channel():
@@ -368,6 +376,14 @@ def test_stream_channel_keeps_api_mac_with_embedded_channel():
     })
 
     assert stream["open_header"]["c"] == "6c-df-fb-01-5e-80-00-01/v3"
+    assert [
+        candidate["open_header"]["c"]
+        for candidate in stream["candidates"]
+    ] == [
+        "6c-df-fb-01-5e-80-00-01/v3",
+        "6c-df-fb-01-5e-80-00-01/v1",
+        "6c-df-fb-01-5e-80-00-01/v2",
+    ]
 
 
 def test_scheduler_opens_expected_output_window():

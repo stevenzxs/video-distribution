@@ -264,3 +264,5 @@ Web 控制台后端会在开窗前调用 `GetDispWallDecoderList` 检查绑定�
 `收到 H.265` 表示浏览器预览暂不能直接解码该流；`H.264 解码失败` 表示已收到
 H.264 码流但浏览器 WebCodecs 解码失败。物理大屏和 Web 页面预览是两条链路，
 物理大屏有画面但页面提示上述状态时，应优先处理浏览器取流/编码兼容问题。
+Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流版本，默认
+按当前 `stream_channel_suffix` 的版本优先，再尝试 `/v1`、`/v2`、`/v3` 中剩余版本。

@@ -491,6 +491,9 @@ Web 页面上方预览使用 WebSocket 另走取流链路。文档示例中的 6
 后端会额外读取 `GetEncoderInfo` 的 `video_stream` 字段并打印流编码，页面预览
 也会直接显示 `未收到码流`、`收到 H.265`、`H.264 解码失败` 等状态，用来区分
 取流失败、浏览器编码兼容问题和真实视频内容黑屏。
+Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流版本，默认
+先用 `stream_channel_suffix` 指定的版本，再依次尝试 `/v1`、`/v2`、`/v3` 中
+尚未尝试过的版本。
 
 如果 `GetDisplayWallInfo` 返回 `resource not exist`，说明目标大屏墙还没有创建
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，

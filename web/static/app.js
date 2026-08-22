@@ -282,6 +282,9 @@ class PreviewReceiver {
   constructor(outputIndex, stream) {
     this.outputIndex = outputIndex;
     this.stream = stream;
+    this.candidates = normalizeStreamCandidates(stream);
+    this.candidateIndex = 0;
+    this.activeCandidate = null;
     this.ws = null;
     this.decoder = null;
     this.decodeDisabled = false;
@@ -298,33 +301,49 @@ class PreviewReceiver {
       return;
     }
 
+    this.startCandidate(0);
+  }
+
+  startCandidate(index) {
+    const candidate = this.candidates[index];
+    if (!candidate) {
+      this.drawState("取流失败", "没有可用取流通道");
+      this.setStreamState("取流失败");
+      return;
+    }
+
+    this.candidateIndex = index;
+    this.activeCandidate = candidate;
+    this.decodeDisabled = false;
+    this.timestamp = 0;
+    this.bytes = 0;
+    this.frames = 0;
+    this.lastFrame = null;
+
     try {
       this.ws = new WebSocket(this.stream.ws_url);
       this.ws.binaryType = "arraybuffer";
       this.ws.onopen = () => {
-        this.ws.send(JSON.stringify(this.stream.open_header));
-        this.setStreamState("等待码流");
-        this.drawState("等待码流", this.stream.channel || this.stream.open_header?.c || "");
+        this.ws.send(JSON.stringify(candidate.open_header));
+        this.setStreamState(`等待码流 ${candidate.channel}`);
+        this.drawState("等待码流", candidate.channel);
         this.waitTimer = window.setTimeout(() => {
           if (!this.frames) {
-            this.drawState("未收到码流", this.stream.channel || this.stream.open_header?.c || "");
-            this.setStreamState("无码流");
+            this.tryNextCandidate("未收到码流");
           }
         }, 3000);
       };
       this.ws.onmessage = (event) => this.onMessage(event.data);
       this.ws.onerror = () => {
-        this.setStreamState("取流异常");
-        this.drawState("取流异常", this.stream.ws_url || "");
+        this.tryNextCandidate("取流异常");
       };
       this.ws.onclose = () => {
-        this.setStreamState("取流已断开");
         if (!this.frames) {
-          this.drawState("取流已断开", this.stream.channel || "");
+          this.tryNextCandidate("取流已断开");
         }
       };
     } catch (error) {
-      this.drawState("取流失败", error.message);
+      this.tryNextCandidate(error.message || "取流失败");
     }
   }
 
@@ -335,22 +354,10 @@ class PreviewReceiver {
     }
 
     if (this.decoder) {
-      try {
-        this.decoder.close();
-      } catch (error) {
-        // 关闭失败不影响重新切换。
-      }
-      this.decoder = null;
+      this.closeDecoder();
     }
 
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      try {
-        this.ws.send(JSON.stringify(this.stream.close_header));
-        this.ws.close();
-      } catch (error) {
-        this.ws.close();
-      }
-    }
+    this.closeActiveSocket();
   }
 
   onMessage(data) {
@@ -379,7 +386,12 @@ class PreviewReceiver {
       return;
     }
 
-    if (!this.tryDecode(frame)) {
+    const decodeResult = this.tryDecode(frame);
+    if (decodeResult === "retrying") {
+      return;
+    }
+
+    if (!decodeResult) {
       drawActivityPreview(this.canvas(), frame, this.bytes);
     }
     this.setStreamState(
@@ -389,9 +401,7 @@ class PreviewReceiver {
 
   tryDecode(frame) {
     if (frame.codec === 3) {
-      this.decodeDisabled = true;
-      drawMessage(this.canvas(), "收到 H.265", "浏览器预览暂不支持，物理大屏仍按平台调度");
-      return true;
+      return this.tryNextCandidate("收到 H.265") ? "retrying" : true;
     }
 
     if (this.decodeDisabled || frame.codec !== 2 || !window.VideoDecoder || !window.EncodedVideoChunk) {
@@ -412,7 +422,7 @@ class PreviewReceiver {
           },
           error: () => {
             this.decodeDisabled = true;
-            drawActivityPreview(this.canvas(), frame, this.bytes, "H.264 解码失败");
+            this.tryNextCandidate("H.264 解码失败");
           },
         });
         const config = {
@@ -424,7 +434,7 @@ class PreviewReceiver {
         this.decoder.configure(config);
       } catch (error) {
         this.decodeDisabled = true;
-        return false;
+        return this.tryNextCandidate("H.264 解码失败") ? "retrying" : true;
       }
     }
 
@@ -439,7 +449,70 @@ class PreviewReceiver {
       return true;
     } catch (error) {
       this.decodeDisabled = true;
+      return this.tryNextCandidate("H.264 解码失败") ? "retrying" : true;
+    }
+  }
+
+  tryNextCandidate(reason) {
+    if (this.waitTimer) {
+      window.clearTimeout(this.waitTimer);
+      this.waitTimer = null;
+    }
+
+    const currentChannel = this.activeCandidate?.channel || "";
+    const nextIndex = this.candidateIndex + 1;
+    if (nextIndex >= this.candidates.length) {
+      this.setStreamState(reason);
+      const detail = currentChannel || this.stream.channel || "";
+      if (reason === "收到 H.265") {
+        this.drawState("收到 H.265", "已尝试所有取流通道，浏览器预览暂不能解码");
+      } else if (this.lastFrame) {
+        drawActivityPreview(this.canvas(), this.lastFrame, this.bytes, reason);
+      } else {
+        this.drawState(reason, detail);
+      }
       return false;
+    }
+
+    this.setStreamState(`${reason}，尝试下一路`);
+    this.closeDecoder();
+    this.closeActiveSocket();
+    this.startCandidate(nextIndex);
+    return true;
+  }
+
+  closeDecoder() {
+    if (!this.decoder) {
+      return;
+    }
+
+    try {
+      this.decoder.close();
+    } catch (error) {
+      // 关闭失败不影响重新切换。
+    }
+    this.decoder = null;
+  }
+
+  closeActiveSocket() {
+    if (!this.ws) {
+      return;
+    }
+
+    const socket = this.ws;
+    this.ws = null;
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    try {
+      if (socket.readyState === WebSocket.OPEN) {
+        const closeHeader = this.activeCandidate?.close_header || this.stream.close_header;
+        socket.send(JSON.stringify(closeHeader));
+      }
+      socket.close();
+    } catch (error) {
+      // 关闭失败不影响尝试下一路取流。
     }
   }
 
@@ -577,6 +650,27 @@ async function fetchJson(url, options = {}) {
 
 function isApiSuccess(payload) {
   return payload?.result === "success" || payload?.result_val === 0;
+}
+
+function normalizeStreamCandidates(stream) {
+  const rawCandidates = Array.isArray(stream?.candidates) && stream.candidates.length
+    ? stream.candidates
+    : [{
+        channel: stream?.channel || stream?.open_header?.c || "",
+        open_header: stream?.open_header,
+        close_header: stream?.close_header,
+      }];
+
+  return rawCandidates
+    .filter((candidate) => candidate?.open_header?.c)
+    .map((candidate) => ({
+      channel: candidate.channel || candidate.open_header.c,
+      open_header: candidate.open_header,
+      close_header: candidate.close_header || {
+        ...candidate.open_header,
+        t: "close",
+      },
+    }));
 }
 
 function codecName(codec) {

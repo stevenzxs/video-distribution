@@ -690,24 +690,17 @@ class MatrixScheduler:
 def build_stream_descriptor(encoder: Dict[str, Any]) -> Dict[str, Any]:
     """生成浏览器连接取流 WebSocket 需要的信息。"""
     channel = _stream_channel(encoder["mac"])
+    channels = _stream_candidate_channels(encoder["mac"])
+    candidates = [
+        _stream_headers(encoder, candidate_channel)
+        for candidate_channel in channels
+    ]
     return {
         "ws_url": WS_BASE_URL,
         "channel": channel,
+        "candidates": candidates,
         "video_stream": encoder.get("video_stream", []),
-        "open_header": {
-            "a": "",
-            "a2": encoder.get("name", ""),
-            "c": channel,
-            "s": API_BASE_URL,
-            "t": "open",
-        },
-        "close_header": {
-            "a": "",
-            "a2": encoder.get("name", ""),
-            "c": channel,
-            "s": API_BASE_URL,
-            "t": "close",
-        },
+        **_stream_headers(encoder, channel),
     }
 
 
@@ -1105,6 +1098,48 @@ def _stream_channel(mac: str) -> str:
         return f"{normalized}/{stream_version}" if separator else normalized
 
     return f"{normalized}-{suffix}"
+
+
+def _stream_candidate_channels(mac: str) -> List[str]:
+    primary = _stream_channel(mac)
+    if "/" not in primary:
+        return [primary]
+
+    base_channel, primary_version = primary.rsplit("/", 1)
+    versions = MATRIX_CONFIG.get("stream_versions", ["v1", "v2", "v3"])
+    if not isinstance(versions, list):
+        versions = ["v1", "v2", "v3"]
+
+    channels = [primary]
+    for version in versions:
+        version_text = str(version).strip().lstrip("/")
+        if not version_text:
+            continue
+        channel = f"{base_channel}/{version_text}"
+        if channel not in channels:
+            channels.append(channel)
+
+    return channels
+
+
+def _stream_headers(encoder: Dict[str, Any], channel: str) -> Dict[str, Any]:
+    return {
+        "channel": channel,
+        "open_header": {
+            "a": "",
+            "a2": encoder.get("name", ""),
+            "c": channel,
+            "s": API_BASE_URL,
+            "t": "open",
+        },
+        "close_header": {
+            "a": "",
+            "a2": encoder.get("name", ""),
+            "c": channel,
+            "s": API_BASE_URL,
+            "t": "close",
+        },
+    }
 
 
 def _even_int(value: Any) -> int:

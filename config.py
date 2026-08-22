@@ -63,6 +63,9 @@ MATRIX_CONFIG = {
     "display_wall_clock": 0,
     # WebSocket 取流通道后缀，文档示例为 MAC-00-01/v3。
     "stream_channel_suffix": "00-01/v3",
+    # Web 预览自动重试的取流版本。优先使用 stream_channel_suffix 中配置的版本，
+    # 若无码流、收到 H.265 或浏览器解码失败，再按此列表尝试其他版本。
+    "stream_versions": ["v1", "v2", "v3"],
 }
 
 # 测试用户配置
