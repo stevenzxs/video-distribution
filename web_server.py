@@ -85,7 +85,8 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
 
         upstream_url = str(stream.get("ws_url", ""))
         control_url = str(stream.get("control_ws_url", ""))
-        protocol = str(stream.get("ws_protocol", ""))
+        control_protocol = str(stream.get("control_ws_protocol") or stream.get("ws_protocol") or "")
+        stream_protocol = str(stream.get("stream_ws_protocol") or "")
         client_protocol = self.headers.get("Sec-WebSocket-Protocol", "")
         client_extensions = self.headers.get("Sec-WebSocket-Extensions", "")
         user_agent = self.headers.get("User-Agent", DEFAULT_PREVIEW_USER_AGENT)
@@ -99,7 +100,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
                 control_result = _call_preview_control_ws(
                     control_url,
                     origin=API_BASE_URL,
-                    protocol=protocol,
+                    protocol=control_protocol,
                     user_agent=user_agent,
                 )
                 logger.info(
@@ -111,20 +112,22 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             upstream = _open_upstream_websocket(
                 upstream_url,
                 origin=API_BASE_URL,
-                protocol=protocol,
+                protocol=stream_protocol,
                 extensions=client_extensions,
                 user_agent=user_agent,
             )
         except OSError as exc:
             logger.error(
                 (
-                    "预览代理连接上游失败: output=%s, control_url=%s, url=%s, protocol=%s, "
+                    "预览代理连接上游失败: output=%s, control_url=%s, url=%s, "
+                    "control_protocol=%s, stream_protocol=%s, "
                     "extensions=%s, timeout=%ss, error=%s: %s"
                 ),
                 output,
                 control_url,
                 upstream_url,
-                "yes" if protocol else "no",
+                "yes" if control_protocol else "no",
+                "yes" if stream_protocol else "no",
                 "yes" if client_extensions else "no",
                 PREVIEW_UPSTREAM_HANDSHAKE_TIMEOUT_SECONDS,
                 type(exc).__name__,
@@ -139,10 +142,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             "Connection: Upgrade",
             f"Sec-WebSocket-Accept: {_websocket_accept_key(key)}",
         ]
-        response_protocol = (
-            upstream.headers.get("sec-websocket-protocol")
-            or _first_requested_protocol(client_protocol)
-        )
+        response_protocol = upstream.headers.get("sec-websocket-protocol", "")
         if response_protocol and _protocol_requested_by_client(
             client_protocol,
             response_protocol,
@@ -162,7 +162,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             output,
             upstream_url,
             API_BASE_URL,
-            "yes" if protocol else "no",
+            "yes" if stream_protocol else "no",
         )
         if upstream.initial_data:
             self.request.sendall(upstream.initial_data)

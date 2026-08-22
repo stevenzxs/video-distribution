@@ -47,15 +47,48 @@ Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)
 }
 
 取码流
-ws://192.168.130.101:8003
+请求网址
+ws://192.168.130.101:12997/play
+请求方法
+GET
+状态代码
+101 Switching Protocols
+
+connection
+Upgrade
+sec-websocket-accept
+PEQuSnj5sKUnIdprpM3xRrHMj1E=
+upgrade
+websocket
+
+accept-encoding
+gzip, deflate
+accept-language
+zh-CN,zh;q=0.9
+cache-control
+no-cache
+connection
+Upgrade
+host
+192.168.130.101:12997
+origin
+http://192.168.130.101:8001
+pragma
+no-cache
+sec-websocket-extensions
+permessage-deflate; client_max_window_bits
+sec-websocket-key
+K8f/QO9YesvVdDQGtJ37+A==
+sec-websocket-version
+13
+upgrade
+websocket
+user-agent
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36
+
 连接成功后发送：
-{
-    "a": "",
-    "a2": "输入1",
-    "c": "6c-df-fb-01-5e-80-00-01/v3",
-    "s": "http://192.168.130.101:8001",
-    "t": "open"
-}
+{"a":"","a2":"输入3","c":"6c-df-fb-01-5e-88-00-01/v1","s":"http://192.168.130.101:8001","t":"open"}
+发送后接收二进制消息视频流。
 
 
 

@@ -24,7 +24,7 @@ def test_preview_event_summary_includes_key_fields():
         "control_ws_url": (
             "ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81"
         ),
-        "ws_url": "ws://192.168.130.101:8003",
+        "ws_url": "ws://192.168.130.101:12997/play",
         "connect_url": "ws://127.0.0.1:8080/api/preview/ws?output=1",
         "channel": "6c-df-fb-01-5e-80-00-01/v1",
         "codec": "H.264",
@@ -37,7 +37,7 @@ def test_preview_event_summary_includes_key_fields():
     assert "output=1" in summary
     assert "event=first_frame" in summary
     assert "control_ws_url=ws://192.168.130.101:8003/?display_wall=" in summary
-    assert "ws_url=ws://192.168.130.101:8003" in summary
+    assert "ws_url=ws://192.168.130.101:12997/play" in summary
     assert "connect_url=ws://127.0.0.1:8080/api/preview/ws?output=1" in summary
     assert "channel=6c-df-fb-01-5e-80-00-01/v1" in summary
     assert "codec=H.264" in summary
@@ -102,7 +102,7 @@ def test_preview_stream_for_output_reads_current_assignment():
                 "assignment": {
                     "stream": {
                         "control_ws_url": "ws://example.test:8003/?display_wall=one",
-                        "ws_url": "ws://example.test:8003",
+                        "ws_url": "ws://example.test:12997/play",
                     }
                 },
             },
@@ -112,7 +112,7 @@ def test_preview_stream_for_output_reads_current_assignment():
 
     assert _preview_stream_for_output(state, 1) == {
         "control_ws_url": "ws://example.test:8003/?display_wall=one",
-        "ws_url": "ws://example.test:8003",
+        "ws_url": "ws://example.test:12997/play",
     }
     assert _preview_stream_for_output(state, 2) == {}
 
@@ -213,6 +213,25 @@ def test_preview_upstream_handshake_matches_platform_headers():
     assert "Sec-WebSocket-Version: 13" in headers
     assert "Upgrade: websocket" in headers
     assert "User-Agent: FakeBrowser" in headers
+
+
+def test_preview_upstream_stream_handshake_omits_empty_protocol():
+    headers = _preview_upstream_handshake_headers(
+        "/play",
+        "192.168.130.101",
+        12997,
+        "fake-key",
+        origin="http://192.168.130.101:8001",
+        protocol="",
+        extensions="permessage-deflate; client_max_window_bits",
+        user_agent="FakeBrowser",
+    )
+
+    assert headers[0] == "GET /play HTTP/1.1"
+    assert "Host: 192.168.130.101:12997" in headers
+    assert "Origin: http://192.168.130.101:8001" in headers
+    assert "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits" in headers
+    assert not any(header.startswith("Sec-WebSocket-Protocol:") for header in headers)
 
 
 def test_preview_upstream_handshake_omits_empty_origin():
