@@ -249,7 +249,9 @@ Web 控制台会复用一次登录获得的 token，不会在每次矩阵切换�
 只连接 `ws://192.168.130.101:8003` 会出现 TCP 可达但 WebSocket 握手超时。平台
 WebSocket 握手还需要 `Sec-WebSocket-Protocol` 携带当前登录 token，前端会使用
 本地 WebSocket 代理连接上游 8003，并把 `Origin` 固定为 API 服务地址
-`http://192.168.130.101:8001`。
+`http://192.168.130.101:8001`。代理还会把浏览器请求中的
+`Sec-WebSocket-Extensions`、`User-Agent` 等握手头桥接到上游，保持与平台页面
+抓包的取流请求一致。
 平台有时会在编码器 MAC 中直接返回通道号，例如
 `6c-df-fb-01-5e-80-00-01`，此时 WebSocket 取流通道应为
 `6c-df-fb-01-5e-80-00-01/v3`，不能再拼成

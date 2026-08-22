@@ -1,9 +1,12 @@
 from web_server import (
     _check_ws_handshake,
     _check_ws_handshakes,
+    _parse_http_headers,
+    _preview_upstream_handshake_headers,
     _preview_output_from_query,
     _preview_event_needs_port_check,
     _preview_event_summary,
+    _protocol_requested_by_client,
     _preview_stream_for_output,
     _websocket_accept_key,
 )
@@ -98,3 +101,60 @@ def test_websocket_accept_key_matches_rfc_example():
     assert _websocket_accept_key("dGhlIHNhbXBsZSBub25jZQ==") == (
         "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
     )
+
+
+def test_preview_upstream_handshake_matches_platform_headers():
+    headers = _preview_upstream_handshake_headers(
+        "/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81",
+        "192.168.130.101",
+        8003,
+        "fake-key",
+        origin="http://192.168.130.101:8001",
+        protocol="fake-token",
+        extensions="permessage-deflate; client_max_window_bits",
+        user_agent="FakeBrowser",
+    )
+
+    assert headers[0] == (
+        "GET /?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81 HTTP/1.1"
+    )
+    assert "Accept-Encoding: gzip, deflate" in headers
+    assert "Connection: Upgrade" in headers
+    assert "Host: 192.168.130.101:8003" in headers
+    assert "Origin: http://192.168.130.101:8001" in headers
+    assert "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits" in headers
+    assert "Sec-WebSocket-Key: fake-key" in headers
+    assert "Sec-WebSocket-Protocol: fake-token" in headers
+    assert "Sec-WebSocket-Version: 13" in headers
+    assert "Upgrade: websocket" in headers
+    assert "User-Agent: FakeBrowser" in headers
+
+
+def test_preview_upstream_handshake_omits_empty_origin():
+    headers = _preview_upstream_handshake_headers(
+        "/",
+        "192.168.130.101",
+        8003,
+        "fake-key",
+        origin="",
+        protocol="fake-token",
+    )
+
+    assert not any(header.startswith("Origin:") for header in headers)
+
+
+def test_parse_http_headers_lowercases_names():
+    headers = _parse_http_headers(
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Sec-WebSocket-Protocol: fake-token\r\n"
+        "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+        "\r\n"
+    )
+
+    assert headers["sec-websocket-protocol"] == "fake-token"
+    assert headers["sec-websocket-extensions"] == "permessage-deflate"
+
+
+def test_protocol_requested_by_client():
+    assert _protocol_requested_by_client("token-a, token-b", "token-b")
+    assert not _protocol_requested_by_client("token-a", "token-b")

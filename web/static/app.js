@@ -327,8 +327,7 @@ class PreviewReceiver {
     this.report("candidate_start");
 
     try {
-      const useDirectProtocol = !this.stream.ws_proxy_path;
-      const protocol = useDirectProtocol ? String(this.stream.ws_protocol || "").trim() : "";
+      const protocol = String(this.stream.ws_protocol || "").trim();
       this.ws = protocol
         ? new WebSocket(this.connectUrl, protocol)
         : new WebSocket(this.connectUrl);

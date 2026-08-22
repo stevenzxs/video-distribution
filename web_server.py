@@ -13,9 +13,10 @@ import mimetypes
 import os
 import select
 import socket
+from dataclasses import dataclass
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from config import API_BASE_URL, LOG_FORMAT, LOG_LEVEL
@@ -26,9 +27,20 @@ BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 STATIC_DIR = WEB_DIR / "static"
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+DEFAULT_PREVIEW_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+)
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class UpstreamWebSocket:
+    sock: socket.socket
+    headers: Dict[str, str]
+    initial_data: bytes = b""
 
 
 class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -67,6 +79,9 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
 
         upstream_url = str(stream.get("ws_url", ""))
         protocol = str(stream.get("ws_protocol", ""))
+        client_protocol = self.headers.get("Sec-WebSocket-Protocol", "")
+        client_extensions = self.headers.get("Sec-WebSocket-Extensions", "")
+        user_agent = self.headers.get("User-Agent", DEFAULT_PREVIEW_USER_AGENT)
         key = self.headers.get("Sec-WebSocket-Key", "")
         if not key:
             self._send_json({"error": "missing Sec-WebSocket-Key"}, 400)
@@ -77,12 +92,19 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
                 upstream_url,
                 origin=API_BASE_URL,
                 protocol=protocol,
+                extensions=client_extensions,
+                user_agent=user_agent,
             )
         except OSError as exc:
             logger.error(
-                "预览代理连接上游失败: output=%s, url=%s, error=%s: %s",
+                (
+                    "预览代理连接上游失败: output=%s, url=%s, protocol=%s, "
+                    "extensions=%s, error=%s: %s"
+                ),
                 output,
                 upstream_url,
+                "yes" if protocol else "no",
+                "yes" if client_extensions else "no",
                 type(exc).__name__,
                 exc,
             )
@@ -95,6 +117,20 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             "Connection: Upgrade",
             f"Sec-WebSocket-Accept: {_websocket_accept_key(key)}",
         ]
+        response_protocol = (
+            upstream.headers.get("sec-websocket-protocol")
+            or _first_requested_protocol(client_protocol)
+        )
+        if response_protocol and _protocol_requested_by_client(
+            client_protocol,
+            response_protocol,
+        ):
+            response_lines.append(f"Sec-WebSocket-Protocol: {response_protocol}")
+
+        response_extensions = upstream.headers.get("sec-websocket-extensions", "")
+        if response_extensions and client_extensions:
+            response_lines.append(f"Sec-WebSocket-Extensions: {response_extensions}")
+
         response = "\r\n".join(response_lines) + "\r\n\r\n"
         self.request.sendall(response.encode("ascii"))
         self.close_connection = True
@@ -106,7 +142,9 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             API_BASE_URL,
             "yes" if protocol else "no",
         )
-        _relay_websocket(self.request, upstream)
+        if upstream.initial_data:
+            self.request.sendall(upstream.initial_data)
+        _relay_websocket(self.request, upstream.sock)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -166,7 +204,10 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError) as exc:
+            logger.warning("响应写入失败: %s: %s", type(exc).__name__, exc)
 
     def _send_empty(self, status: int) -> None:
         self.send_response(status)
@@ -303,18 +344,16 @@ def _check_ws_handshake(
         return f"url={ws_url or '-'}, status=invalid_url"
 
     key = base64.b64encode(os.urandom(16)).decode("ascii")
-    headers = [
-        f"GET {path} HTTP/1.1",
-        f"Host: {host}:{port}",
-        "Upgrade: websocket",
-        "Connection: Upgrade",
-        f"Sec-WebSocket-Key: {key}",
-        "Sec-WebSocket-Version: 13",
-    ]
-    if origin:
-        headers.append(f"Origin: {origin}")
-    if protocol:
-        headers.append(f"Sec-WebSocket-Protocol: {protocol}")
+    headers = _preview_upstream_handshake_headers(
+        path,
+        host,
+        port,
+        key,
+        origin=origin,
+        protocol=protocol,
+        extensions="permessage-deflate; client_max_window_bits",
+        user_agent=DEFAULT_PREVIEW_USER_AGENT,
+    )
     request = "\r\n".join(headers) + "\r\n\r\n"
 
     try:
@@ -374,7 +413,9 @@ def _open_upstream_websocket(
     ws_url: str,
     origin: str,
     protocol: str,
-) -> socket.socket:
+    extensions: str = "",
+    user_agent: str = "",
+) -> UpstreamWebSocket:
     parsed = urlparse(ws_url)
     host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "wss" else 80)
@@ -387,38 +428,84 @@ def _open_upstream_websocket(
         raise OSError("wss upstream is not supported by the local preview proxy")
 
     key = base64.b64encode(os.urandom(16)).decode("ascii")
-    headers = [
-        f"GET {path} HTTP/1.1",
-        f"Host: {host}:{port}",
-        "Upgrade: websocket",
-        "Connection: Upgrade",
-        "Cache-Control: no-cache",
-        "Pragma: no-cache",
-        "Accept-Language: zh-CN,zh;q=0.9",
-        f"Origin: {origin}",
-        f"Sec-WebSocket-Key: {key}",
-        "Sec-WebSocket-Version: 13",
-    ]
-    if protocol:
-        headers.append(f"Sec-WebSocket-Protocol: {protocol}")
+    headers = _preview_upstream_handshake_headers(
+        path,
+        host,
+        port,
+        key,
+        origin=origin,
+        protocol=protocol,
+        extensions=extensions,
+        user_agent=user_agent or DEFAULT_PREVIEW_USER_AGENT,
+    )
     request = "\r\n".join(headers) + "\r\n\r\n"
 
     sock = socket.create_connection((host, port), timeout=5.0)
     try:
         sock.settimeout(5.0)
         sock.sendall(request.encode("ascii"))
-        response = _recv_http_headers(sock)
+        response, initial_data = _recv_http_headers(sock)
         first_line = response.splitlines()[0] if response else ""
         if " 101 " not in f" {first_line} ":
             raise OSError(f"upstream handshake rejected: {first_line[:160]}")
         sock.settimeout(None)
-        return sock
+        return UpstreamWebSocket(
+            sock=sock,
+            headers=_parse_http_headers(response),
+            initial_data=initial_data,
+        )
     except Exception:
         sock.close()
         raise
 
 
-def _recv_http_headers(sock: socket.socket) -> str:
+def _preview_upstream_handshake_headers(
+    path: str,
+    host: str,
+    port: int,
+    key: str,
+    origin: str,
+    protocol: str,
+    extensions: str = "",
+    user_agent: str = "",
+) -> List[str]:
+    headers = [
+        f"GET {path} HTTP/1.1",
+        "Accept-Encoding: gzip, deflate",
+        "Accept-Language: zh-CN,zh;q=0.9",
+        "Cache-Control: no-cache",
+        "Connection: Upgrade",
+        f"Host: {host}:{port}",
+        "Pragma: no-cache",
+    ]
+    if origin:
+        headers.insert(6, f"Origin: {origin}")
+    if extensions:
+        headers.append(f"Sec-WebSocket-Extensions: {extensions}")
+    headers.extend([
+        f"Sec-WebSocket-Key: {key}",
+    ])
+    if protocol:
+        headers.append(f"Sec-WebSocket-Protocol: {protocol}")
+    headers.extend([
+        "Sec-WebSocket-Version: 13",
+        "Upgrade: websocket",
+        f"User-Agent: {user_agent or DEFAULT_PREVIEW_USER_AGENT}",
+    ])
+    return headers
+
+
+def _parse_http_headers(response: str) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    for line in response.splitlines()[1:]:
+        if ":" not in line:
+            continue
+        name, value = line.split(":", 1)
+        headers[name.strip().lower()] = value.strip()
+    return headers
+
+
+def _recv_http_headers(sock: socket.socket) -> Tuple[str, bytes]:
     chunks = []
     total = 0
     while total < 8192:
@@ -429,7 +516,26 @@ def _recv_http_headers(sock: socket.socket) -> str:
         total += len(chunk)
         if b"\r\n\r\n" in b"".join(chunks):
             break
-    return b"".join(chunks).decode("iso-8859-1", errors="replace")
+    data = b"".join(chunks)
+    header_bytes, separator, initial_data = data.partition(b"\r\n\r\n")
+    if separator:
+        header_bytes += separator
+    return header_bytes.decode("iso-8859-1", errors="replace"), initial_data
+
+
+def _first_requested_protocol(value: str) -> str:
+    return next(
+        (item.strip() for item in value.split(",") if item.strip()),
+        "",
+    )
+
+
+def _protocol_requested_by_client(requested: str, selected: str) -> bool:
+    selected = selected.strip()
+    return bool(
+        selected
+        and selected in {item.strip() for item in requested.split(",") if item.strip()}
+    )
 
 
 def _relay_websocket(client: socket.socket, upstream: socket.socket) -> None:

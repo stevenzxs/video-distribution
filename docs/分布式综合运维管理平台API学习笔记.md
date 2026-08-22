@@ -497,6 +497,8 @@ Web 页面上方预览使用 WebSocket 另走取流链路。实测 8003 取流�
 WebSocket 握手还需要 `Sec-WebSocket-Protocol` 携带当前登录 token。由于浏览器
 不能手动指定 `Origin`，页面会优先连接本地 `/api/preview/ws?output=N` 代理，由
 后端代理用 `Origin=http://192.168.130.101:8001` 和 token 子协议连接上游 8003。
+代理会继续桥接浏览器请求中的 `Sec-WebSocket-Extensions`、`User-Agent` 等握手头，
+尽量保持和平台页面抓包请求一致。
 页面预览会直接显示 `未收到码流`、`收到 H.265`、`H.264 解码失败` 等状态，用来区分
 取流失败、浏览器编码兼容问题和真实视频内容黑屏。
 Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流版本，默认
