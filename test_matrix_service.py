@@ -1,6 +1,7 @@
 import pytest
 
 from api_client import APIClient, is_success_response
+from config import MATRIX_CONFIG
 from matrix_service import MatrixError, MatrixRuntimeState, MatrixScheduler, parse_matrix_command
 
 
@@ -23,7 +24,7 @@ class FakeAPIClient:
         self.logged_out = False
         self.display_walls = display_walls
         if self.display_walls is None:
-            self.display_walls = [{"name": "视频矩阵大屏", "row": 1, "column": 3}]
+            self.display_walls = [{"name": "VW3", "row": 1, "column": 3}]
         if bound_decoders is None:
             bound_decoders = [
                 {"name": "显示器1", "ip": "192.168.130.61", "mac": "00-40-01-2b-06-27"},
@@ -142,7 +143,7 @@ def test_create_display_wall_payload_matches_platform_shape():
     client = CapturingAPIClient()
 
     client.create_display_wall(
-        name="视频矩阵大屏",
+        name="VW3",
         row=1,
         column=3,
         resolution_x=1920,
@@ -152,7 +153,7 @@ def test_create_display_wall_payload_matches_platform_shape():
 
     assert client.last_endpoint == "/mvapi/v1/displaywall/CreateDisplayWall"
     assert client.last_data == {
-        "name": "视频矩阵大屏",
+        "name": "VW3",
         "row": 1,
         "column": 3,
         "resolution_x": 1920,
@@ -203,10 +204,10 @@ def test_scheduler_opens_expected_output_window():
     assert route["command"] == "1v2."
     assert route["input"]["name"] == "视频会议终端"
     assert route["output"]["name"] == "显示器2"
-    assert route["display_wall"] == "视频矩阵大屏"
+    assert route["display_wall"] == "VW3"
     assert fake.opened_windows == [
         {
-            "display_wall": "视频矩阵大屏",
+            "display_wall": "VW3",
             "src_mac": "00-40-01-2b-05-27",
             "pos_x": 1920,
             "pos_y": 0,
@@ -240,7 +241,7 @@ def test_scheduler_creates_display_wall_before_open_wnd():
 
     route = scheduler.switch_command("1v1.")
 
-    assert route["display_wall"] == "视频矩阵大屏"
+    assert route["display_wall"] == "VW3"
     assert len(fake.created_walls) == 1
     created_wall = fake.created_walls[0]
     assert created_wall["create_time"].isdigit()
@@ -249,7 +250,7 @@ def test_scheduler_creates_display_wall_before_open_wnd():
         for key, value in created_wall.items()
         if key != "create_time"
     } == {
-        "name": "视频矩阵大屏",
+        "name": "VW3",
         "row": 1,
         "column": 3,
         "resolution_x": 1920,
@@ -273,4 +274,18 @@ def test_scheduler_creates_display_wall_before_open_wnd():
         "vwidth": 0,
         "clock": 0,
     }
-    assert fake.opened_windows[0]["display_wall"] == "视频矩阵大屏"
+    assert fake.opened_windows[0]["display_wall"] == "VW3"
+
+
+def test_scheduler_rejects_display_wall_name_that_is_too_long(monkeypatch):
+    monkeypatch.setitem(MATRIX_CONFIG, "display_wall_name", "视频矩阵大屏")
+    fake = FakeAPIClient(display_walls=[])
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    with pytest.raises(MatrixError, match="平台资源名建议不超过"):
+        scheduler.switch_command("1v1.")
+
+    assert fake.created_walls == []

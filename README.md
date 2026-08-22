@@ -191,6 +191,7 @@ client.load_layout(layout_type=0, name="预案1", display_wall="大屏1")
 | 6 | 服务器未连接 | 检查网络连接 |
 | 13 | 资源不存在 | 确认资源名称或ID |
 | 16 | 权限不足 | 使用管理员账号 |
+| 27 | 资源名称过长 | 大屏等资源名使用短 ASCII，例如 `VW3` |
 
 完整错误码请参考: `docs/分布式综合运维管理平台API学习笔记.md`
 
@@ -227,7 +228,7 @@ python web_server.py --host 127.0.0.1 --port 8080
 - 3 个解码器：`DEVICES["decoders"]`
 - 大屏名称和单屏尺寸：`MATRIX_CONFIG`
 
-如果设备列表 API 未返回 MAC，请在 `config.py` 对应设备的 `mac` 字段中补充。后端会按输出解码器数量确保目标大屏存在：3 个解码器会创建 1 行 3 列的大屏墙，并在 `CreateDisplayWall` 请求中自动补 `create_time` 当前秒级时间戳。`MATRIX_CONFIG["display_wall_name"]` 是目标大屏名称，默认 `视频矩阵大屏`。
+如果设备列表 API 未返回 MAC，请在 `config.py` 对应设备的 `mac` 字段中补充。后端会按输出解码器数量确保目标大屏存在：3 个解码器会创建 1 行 3 列的大屏墙，并在 `CreateDisplayWall` 请求中自动补 `create_time` 当前秒级时间戳。`MATRIX_CONFIG["display_wall_name"]` 是目标大屏名称，默认 `VW3`；平台资源名长度限制较短，建议使用短 ASCII 名称。
 
 ### OpenWnd 报 `sdk failed: -10`
 

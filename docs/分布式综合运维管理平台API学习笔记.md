@@ -40,8 +40,15 @@
 | 18 | json data parse failed | 数据解析json错误 |
 | 19 | user name repeat | 用户名重复 |
 | 20 | display wall name repeat | 大屏名称重复 |
+| 21 | logic encoder name repeat | 逻辑编码器名称重复 |
+| 22 | marquee name repeat | 跑马灯名称重复 |
+| 23 | layout name repeat | 预案名称重复 |
+| 24 | upload marquee files failed | 上传跑马灯文件失败 |
 | 25 | exceed license | 授权不足 |
+| 26 | marquee is publishing | 跑马灯正在发布 |
+| 27 | resource name is too long | 资源名称过长 |
 | 28 | set device ip conflicts | 设置设备IP存在冲突 |
+| 29 | device status info not exist | 设备状态信息不存在 |
 
 ## 3. 核心API模块
 
@@ -179,7 +186,7 @@
 #### 3.5.3 创建大屏幕墙
 - **URL**: `POST /mvapi/v1/displaywall/CreateDisplayWall`
 - **请求参数**:
-  - `name`: 大屏名称
+  - `name`: 大屏名称；实测平台资源名称长度限制较短，建议使用短 ASCII 名称，例如 `VW3`
   - `row`, `column`: 行列数
   - `resolution_x`, `resolution_y`: 分辨率
   - `create_time`: 创建时间，平台创建大屏时要求携带；当前代码使用秒级 Unix 时间戳字符串
@@ -449,6 +456,8 @@
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，
 请求体需按接口类型传参：`com` 为整数，`fusion_band`、`lcd_frame`、
 `border_clipping` 为 JSON 对象，并包含 `create_time`，再继续绑定解码器和开窗。
+如果 `CreateDisplayWall` 返回 `resource name is too long`，请把
+`MATRIX_CONFIG["display_wall_name"]` 改为短 ASCII 名称，例如默认的 `VW3`。
 
 ### 6.3 预案使用流程
 1. 配置好窗口布局

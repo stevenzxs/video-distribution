@@ -34,6 +34,7 @@ NAME_KEYS = (
     "decoderName",
 )
 WALL_NAME_KEYS = ("name", "display_wall", "displayWall", "wall_name", "wallName")
+RESOURCE_NAME_MAX_BYTES = 16
 
 
 class MatrixError(Exception):
@@ -87,7 +88,9 @@ class MatrixRuntimeState:
                 for index in range(1, 4)
             ],
             "matrix": {
-                "display_wall_name": MATRIX_CONFIG.get("display_wall_name", ""),
+                "display_wall_name": _target_display_wall_name(
+                    len(DEVICES.get("decoders", [])),
+                ),
                 "screen_width": MATRIX_CONFIG.get("screen_width", 1920),
                 "screen_height": MATRIX_CONFIG.get("screen_height", 1080),
                 "ws_url": WS_BASE_URL,
@@ -233,6 +236,7 @@ class MatrixScheduler:
                 502,
             )
 
+        _validate_resource_name("MATRIX_CONFIG.display_wall_name", name)
         return self._create_display_wall(client, name, output_count)
 
     def _find_display_wall(
@@ -431,7 +435,19 @@ def _target_display_wall_name(output_count: int) -> str:
     configured = str(MATRIX_CONFIG.get("display_wall_name", "")).strip()
     if configured:
         return configured
-    return f"视频矩阵大屏{output_count}"
+    return f"VW{output_count}"
+
+
+def _validate_resource_name(label: str, name: str) -> None:
+    length = len(name.encode("utf-8"))
+    if length <= RESOURCE_NAME_MAX_BYTES:
+        return
+
+    raise MatrixError(
+        f"{label} 过长：{length} 字节，平台资源名建议不超过 "
+        f"{RESOURCE_NAME_MAX_BYTES} 字节；请改成短名称，例如 VW3",
+        500,
+    )
 
 
 def _public_device(device: Dict[str, Any], index: int) -> Dict[str, Any]:

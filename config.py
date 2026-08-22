@@ -29,7 +29,8 @@ DEVICES = {
 # 矩阵调度配置
 MATRIX_CONFIG = {
     # 后端会确保该大屏存在；不存在时按输出解码器数量创建 1xN 大屏。
-    "display_wall_name": "视频矩阵大屏",
+    # 平台资源名称长度限制较短，默认使用短 ASCII 名称，避免中文名按字节计算后超限。
+    "display_wall_name": "VW3",
     "auto_create_display_wall": True,
     # 1行3列大屏中单个输出窗口尺寸，位置会按输出序号横向排列。
     "screen_width": 1920,
