@@ -38,6 +38,16 @@ NAME_KEYS = (
 WALL_NAME_KEYS = ("name", "display_wall", "displayWall", "wall_name", "wallName")
 BIND_X_KEYS = ("bind_x", "bindX")
 BIND_Y_KEYS = ("bind_y", "bindY")
+WINDOW_HANDLE_KEYS = ("handle", "wnd_handle", "wndHandle", "id")
+WINDOW_X_KEYS = ("x", "pos_x", "posX")
+WINDOW_Y_KEYS = ("y", "pos_y", "posY")
+WINDOW_WIDTH_KEYS = ("width", "w")
+WINDOW_HEIGHT_KEYS = ("height", "h")
+WINDOW_LAYER_KEYS = ("layer",)
+WINDOW_SRC_STATUS_KEYS = ("src_status", "srcStatus")
+WINDOW_SRC_NAME_KEYS = ("src_name", "srcName", "source_name", "sourceName")
+WINDOW_VERIFY_ATTEMPTS = 3
+WINDOW_VERIFY_DELAY_SECONDS = 0.2
 RESOURCE_NAME_MAX_BYTES = 16
 
 
@@ -454,6 +464,18 @@ class MatrixScheduler:
                 502,
             )
 
+        existing_windows = self._get_display_wall_windows(client, display_wall)
+        closed_windows = self._close_output_windows(
+            client,
+            display_wall,
+            output_index,
+            existing_windows,
+            pos_x,
+            pos_y,
+            screen_width,
+            screen_height,
+        )
+
         logger.info(
             "开窗: display_wall=%s, src_mac=%s, pos=(%d,%d), size=%dx%d",
             display_wall,
@@ -478,13 +500,138 @@ class MatrixScheduler:
                 502,
             )
 
+        logger.info("开窗结果: %s", _summarize_api_result(result))
+        verified_windows = self._verify_output_window(
+            client,
+            display_wall,
+            src_mac,
+            result,
+            output_index,
+            pos_x,
+            pos_y,
+            screen_width,
+            screen_height,
+        )
+
         return {
             "pos_x": pos_x,
             "pos_y": pos_y,
             "width": screen_width,
             "height": screen_height,
             "result": result,
+            "closed_windows": closed_windows,
+            "verified_windows": verified_windows,
         }
+
+    def _get_display_wall_windows(
+        self,
+        client: APIClient,
+        display_wall: str,
+    ) -> List[Dict[str, Any]]:
+        result = client.get_display_wall_wnds(display_wall)
+        if not is_success_response(result):
+            raise MatrixError(
+                f"获取大屏 {display_wall} 窗口列表失败 {format_api_error(result)}",
+                502,
+            )
+
+        windows = _extract_window_records(result)
+        logger.info(
+            "大屏 %s 当前窗口: %s",
+            display_wall,
+            _summarize_windows(windows),
+        )
+        return windows
+
+    def _close_output_windows(
+        self,
+        client: APIClient,
+        display_wall: str,
+        output_index: int,
+        windows: Iterable[Dict[str, Any]],
+        pos_x: int,
+        pos_y: int,
+        width: int,
+        height: int,
+    ) -> List[Dict[str, Any]]:
+        closed_windows = []
+        target_windows = [
+            window for window in windows
+            if _window_overlaps(window, pos_x, pos_y, width, height)
+        ]
+
+        for window in target_windows:
+            handle = _optional_int(_first_value(window, WINDOW_HANDLE_KEYS))
+            if handle is None:
+                raise MatrixError(
+                    f"输出{output_index}区域存在旧窗口但缺少 handle，无法关闭："
+                    f"{_summarize_window(window)}",
+                    502,
+                )
+
+            logger.info(
+                "关闭输出%d旧窗口: %s",
+                output_index,
+                _summarize_window(window),
+            )
+            result = client.close_wnd(display_wall, handle)
+            if not is_success_response(result) and result.get("result_val") != 13:
+                raise MatrixError(
+                    f"关闭输出{output_index}旧窗口 handle={handle} 失败 "
+                    f"{format_api_error(result)}",
+                    502,
+                )
+
+            closed_windows.append(_public_window(window))
+
+        return closed_windows
+
+    def _verify_output_window(
+        self,
+        client: APIClient,
+        display_wall: str,
+        src_mac: str,
+        open_result: Dict[str, Any],
+        output_index: int,
+        pos_x: int,
+        pos_y: int,
+        width: int,
+        height: int,
+    ) -> List[Dict[str, Any]]:
+        expected_handle = _optional_int(_first_value(open_result, WINDOW_HANDLE_KEYS))
+        last_windows: List[Dict[str, Any]] = []
+
+        for attempt in range(WINDOW_VERIFY_ATTEMPTS):
+            if attempt:
+                time.sleep(WINDOW_VERIFY_DELAY_SECONDS)
+            last_windows = self._get_display_wall_windows(client, display_wall)
+            matched_windows = [
+                window for window in last_windows
+                if _window_matches_output(
+                    window,
+                    src_mac,
+                    expected_handle,
+                    pos_x,
+                    pos_y,
+                    width,
+                    height,
+                )
+            ]
+            if matched_windows:
+                logger.info(
+                    "开窗确认: 输出%d %s",
+                    output_index,
+                    _summarize_windows(matched_windows),
+                )
+                return [_public_window(window) for window in matched_windows]
+
+        raise MatrixError(
+            f"平台已返回 OpenWnd 成功(handle={expected_handle})，但大屏 {display_wall} "
+            f"窗口列表里没有发现输出{output_index}的目标窗口；期望 src_mac={src_mac}, "
+            f"位置=({pos_x},{pos_y},{width},{height})。当前窗口: "
+            f"{_summarize_windows(last_windows)}",
+            502,
+        )
 
 
 def build_stream_descriptor(encoder: Dict[str, Any]) -> Dict[str, Any]:
@@ -622,6 +769,33 @@ def _extract_display_wall_records(payload: Any) -> List[Dict[str, Any]]:
     return records
 
 
+def _extract_window_records(payload: Any) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            has_handle = _first_value(value, WINDOW_HANDLE_KEYS) is not None
+            has_rect = all(
+                _first_value(value, keys) is not None
+                for keys in (
+                    WINDOW_X_KEYS,
+                    WINDOW_Y_KEYS,
+                    WINDOW_WIDTH_KEYS,
+                    WINDOW_HEIGHT_KEYS,
+                )
+            )
+            if has_handle or has_rect:
+                records.append(value)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload.get("wnds", payload) if isinstance(payload, dict) else payload)
+    return records
+
+
 def _device_record_matches_at_position(
     expected: Dict[str, Any],
     candidates: Iterable[Dict[str, Any]],
@@ -676,6 +850,110 @@ def _summarize_devices(devices: Iterable[Dict[str, Any]]) -> str:
             labels.append("/".join(parts))
 
     return ", ".join(labels[:6]) if labels else "无"
+
+
+def _public_window(window: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "handle": _optional_int(_first_value(window, WINDOW_HANDLE_KEYS)),
+        "src_mac": str(_first_value(window, MAC_KEYS) or ""),
+        "src_name": str(_first_value(window, WINDOW_SRC_NAME_KEYS) or ""),
+        "src_status": _optional_int(_first_value(window, WINDOW_SRC_STATUS_KEYS)),
+        "x": _optional_int(_first_value(window, WINDOW_X_KEYS)),
+        "y": _optional_int(_first_value(window, WINDOW_Y_KEYS)),
+        "width": _optional_int(_first_value(window, WINDOW_WIDTH_KEYS)),
+        "height": _optional_int(_first_value(window, WINDOW_HEIGHT_KEYS)),
+        "layer": _optional_int(_first_value(window, WINDOW_LAYER_KEYS)),
+    }
+
+
+def _window_matches_output(
+    window: Dict[str, Any],
+    src_mac: str,
+    expected_handle: Optional[int],
+    pos_x: int,
+    pos_y: int,
+    width: int,
+    height: int,
+) -> bool:
+    handle = _optional_int(_first_value(window, WINDOW_HANDLE_KEYS))
+    if expected_handle is not None and handle == expected_handle:
+        return True
+
+    if not _window_rect_matches(window, pos_x, pos_y, width, height):
+        return False
+
+    window_src_mac = _normalize_mac(_first_value(window, MAC_KEYS) or "")
+    expected_src_mac = _normalize_mac(src_mac)
+    return not window_src_mac or window_src_mac == expected_src_mac
+
+
+def _window_rect_matches(
+    window: Dict[str, Any],
+    pos_x: int,
+    pos_y: int,
+    width: int,
+    height: int,
+) -> bool:
+    return (
+        _optional_int(_first_value(window, WINDOW_X_KEYS)) == pos_x
+        and _optional_int(_first_value(window, WINDOW_Y_KEYS)) == pos_y
+        and _optional_int(_first_value(window, WINDOW_WIDTH_KEYS)) == width
+        and _optional_int(_first_value(window, WINDOW_HEIGHT_KEYS)) == height
+    )
+
+
+def _window_overlaps(
+    window: Dict[str, Any],
+    pos_x: int,
+    pos_y: int,
+    width: int,
+    height: int,
+) -> bool:
+    window_x = _optional_int(_first_value(window, WINDOW_X_KEYS))
+    window_y = _optional_int(_first_value(window, WINDOW_Y_KEYS))
+    window_width = _optional_int(_first_value(window, WINDOW_WIDTH_KEYS))
+    window_height = _optional_int(_first_value(window, WINDOW_HEIGHT_KEYS))
+    if None in (window_x, window_y, window_width, window_height):
+        return False
+
+    return (
+        window_x < pos_x + width
+        and window_x + window_width > pos_x
+        and window_y < pos_y + height
+        and window_y + window_height > pos_y
+    )
+
+
+def _summarize_windows(windows: Iterable[Dict[str, Any]]) -> str:
+    summaries = [_summarize_window(window) for window in windows]
+    return ", ".join(summaries[:8]) if summaries else "无窗口"
+
+
+def _summarize_window(window: Dict[str, Any]) -> str:
+    public = _public_window(window)
+    src = public["src_name"] or public["src_mac"] or "-"
+    status = public["src_status"]
+    layer = public["layer"]
+    suffixes = []
+    if layer is not None:
+        suffixes.append(f"layer={layer}")
+    if status is not None:
+        suffixes.append(f"src_status={status}")
+    suffix = ", " + ", ".join(suffixes) if suffixes else ""
+    return (
+        f"handle={public['handle']}, src={src}, "
+        f"rect=({public['x']},{public['y']},{public['width']},{public['height']})"
+        f"{suffix}"
+    )
+
+
+def _summarize_api_result(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+
+    keys = ("result", "result_val", "handle")
+    summary = {key: result.get(key) for key in keys if key in result}
+    return summary or result
 
 
 def _stream_channel(mac: str) -> str:

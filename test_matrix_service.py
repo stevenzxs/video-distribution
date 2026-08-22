@@ -18,14 +18,25 @@ class CapturingAPIClient(APIClient):
 
 
 class FakeAPIClient:
-    def __init__(self, bound_decoders=None, display_walls=None, bind_result=None):
+    def __init__(
+        self,
+        bound_decoders=None,
+        display_walls=None,
+        bind_result=None,
+        windows=None,
+        record_opened_window=True,
+    ):
         self.opened_windows = []
+        self.closed_windows = []
         self.created_walls = []
         self.bind_calls = []
         self.logged_out = False
         self.login_count = 0
         self.token = None
+        self.next_handle = 1001
         self.bind_result = bind_result or {"result": "success", "result_val": 0}
+        self.record_opened_window = record_opened_window
+        self.windows = list(windows or [])
         self.display_walls = display_walls
         if self.display_walls is None:
             self.display_walls = [{"name": "VW3", "row": 1, "column": 3}]
@@ -167,7 +178,16 @@ class FakeAPIClient:
     def open_display_wall(self, name):
         return {"result": "success", "result_val": 0, "name": name}
 
+    def get_display_wall_wnds(self, display_wall):
+        return {
+            "result": "success",
+            "result_val": 0,
+            "wnds": list(self.windows),
+        }
+
     def open_wnd(self, display_wall, src_mac, pos_x, pos_y, width, height):
+        handle = self.next_handle
+        self.next_handle += 1
         payload = {
             "display_wall": display_wall,
             "src_mac": src_mac,
@@ -177,7 +197,27 @@ class FakeAPIClient:
             "height": height,
         }
         self.opened_windows.append(payload)
-        return {"result": "success", "result_val": 0, "handle": 1001}
+        if self.record_opened_window:
+            self.windows.append({
+                "src_mac": src_mac,
+                "src_name": "",
+                "src_status": 1,
+                "handle": handle,
+                "x": pos_x,
+                "y": pos_y,
+                "width": width,
+                "height": height,
+                "layer": len(self.windows) + 1,
+            })
+        return {"result": "success", "result_val": 0, "handle": handle}
+
+    def close_wnd(self, display_wall, handle):
+        self.closed_windows.append(handle)
+        self.windows = [
+            window for window in self.windows
+            if window.get("handle") != handle
+        ]
+        return {"result": "success", "result_val": 0}
 
 
 def test_api_success_uses_platform_success_shape():
@@ -266,6 +306,15 @@ def test_bind_decoder_payload_matches_platform_shape():
     }
 
 
+def test_display_wall_wnds_payload_uses_display_wall_field():
+    client = CapturingAPIClient()
+
+    client.get_display_wall_wnds("VW3")
+
+    assert client.last_endpoint == "/mvapi/v1/wnd/GetDisplayWallWnds"
+    assert client.last_data == {"display_wall": "VW3"}
+
+
 def test_parse_matrix_command():
     command = parse_matrix_command(" 1v3. ")
     assert command.input_index == 1
@@ -338,6 +387,46 @@ def test_scheduler_reuses_login_for_consecutive_switches():
             "height": 1080,
         },
     ]
+    assert fake.closed_windows == [1001]
+
+
+def test_scheduler_closes_existing_output_window_before_open_wnd():
+    fake = FakeAPIClient(windows=[
+        {
+            "src_mac": "00-40-01-2b-05-28",
+            "src_name": "摄像头1",
+            "src_status": 1,
+            "handle": 77,
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080,
+            "layer": 1,
+        }
+    ])
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    route = scheduler.switch_command("1v1.")
+
+    assert fake.closed_windows == [77]
+    assert route["window"]["closed_windows"][0]["handle"] == 77
+    assert route["window"]["verified_windows"][0]["src_mac"] == "00-40-01-2b-05-27"
+
+
+def test_scheduler_reports_open_wnd_success_without_window_state():
+    fake = FakeAPIClient(record_opened_window=False)
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    with pytest.raises(MatrixError, match="窗口列表里没有发现输出1"):
+        scheduler.switch_command("1v1.")
+
+    assert fake.opened_windows[0]["display_wall"] == "VW3"
 
 
 def test_scheduler_binds_unbound_display_wall_before_open_wnd():
