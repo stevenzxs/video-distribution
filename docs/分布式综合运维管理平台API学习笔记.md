@@ -507,6 +507,8 @@ Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流�
 浏览器预览会把关键诊断事件回传到本地 Web 后端日志，例如
 `candidate_start`、`first_frame`、`candidate_failed`、`decode_ok`。后端日志中的
 `预览事件` 可用于判断哪个取流通道收到帧、帧编码类型，以及浏览器是否解码成功。
+本地代理上游 WebSocket 握手最长等待 20 秒，前端连接最长等待 25 秒；握手诊断
+日志会输出 `elapsed=...s`，用于判断平台 8003 是否只是响应较慢。
 如果 `candidate_failed` 发生在 0 帧阶段，后端会同步做一次 `ws_url` TCP 端口检查；
 `status=tcp_failed` 表示本机无法连接取流服务 8003，应优先检查取流服务、防火墙
 或网络路由。

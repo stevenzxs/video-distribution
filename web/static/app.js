@@ -10,6 +10,8 @@ const state = {
 
 const previewReceivers = new Map();
 const FRAME_HEADER_LENGTH = 17;
+const PREVIEW_CONNECT_TIMEOUT_MS = 25000;
+const PREVIEW_FIRST_FRAME_TIMEOUT_MS = 5000;
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("refreshButton").addEventListener("click", loadConfig);
@@ -336,7 +338,7 @@ class PreviewReceiver {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
           this.tryNextCandidate("连接超时");
         }
-      }, 5000);
+      }, PREVIEW_CONNECT_TIMEOUT_MS);
       this.ws.onopen = () => {
         this.clearConnectTimer();
         this.report("ws_open");
@@ -347,7 +349,7 @@ class PreviewReceiver {
           if (!this.frames) {
             this.tryNextCandidate("未收到码流");
           }
-        }, 3000);
+        }, PREVIEW_FIRST_FRAME_TIMEOUT_MS);
       };
       this.ws.onmessage = (event) => this.onMessage(event.data);
       this.ws.onerror = () => {

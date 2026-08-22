@@ -13,6 +13,7 @@ import mimetypes
 import os
 import select
 import socket
+import time
 from dataclasses import dataclass
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -31,6 +32,9 @@ DEFAULT_PREVIEW_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 )
+PREVIEW_TCP_CONNECT_TIMEOUT_SECONDS = 3.0
+PREVIEW_UPSTREAM_HANDSHAKE_TIMEOUT_SECONDS = 20.0
+PREVIEW_DIAGNOSTIC_HANDSHAKE_TIMEOUT_SECONDS = 8.0
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -99,12 +103,13 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             logger.error(
                 (
                     "预览代理连接上游失败: output=%s, url=%s, protocol=%s, "
-                    "extensions=%s, error=%s: %s"
+                    "extensions=%s, timeout=%ss, error=%s: %s"
                 ),
                 output,
                 upstream_url,
                 "yes" if protocol else "no",
                 "yes" if client_extensions else "no",
+                PREVIEW_UPSTREAM_HANDSHAKE_TIMEOUT_SECONDS,
                 type(exc).__name__,
                 exc,
             )
@@ -300,7 +305,10 @@ def _check_ws_port(ws_url: str) -> str:
         return f"url={ws_url or '-'}, status=invalid_url"
 
     try:
-        with socket.create_connection((host, port), timeout=1.5):
+        with socket.create_connection(
+            (host, port),
+            timeout=PREVIEW_TCP_CONNECT_TIMEOUT_SECONDS,
+        ):
             return f"url={ws_url}, status=tcp_ok"
     except OSError as exc:
         return f"url={ws_url}, status=tcp_failed, error={type(exc).__name__}: {exc}"
@@ -356,21 +364,25 @@ def _check_ws_handshake(
     )
     request = "\r\n".join(headers) + "\r\n\r\n"
 
+    started = time.monotonic()
     try:
-        with socket.create_connection((host, port), timeout=1.5) as sock:
-            sock.settimeout(2.0)
+        with socket.create_connection(
+            (host, port),
+            timeout=PREVIEW_TCP_CONNECT_TIMEOUT_SECONDS,
+        ) as sock:
+            sock.settimeout(PREVIEW_DIAGNOSTIC_HANDSHAKE_TIMEOUT_SECONDS)
             sock.sendall(request.encode("ascii"))
             response = sock.recv(512).decode("iso-8859-1", errors="replace")
     except socket.timeout:
         return (
             f"url={ws_url}, origin={origin or '-'}, protocol={'yes' if protocol else 'no'}, "
-            "status=handshake_timeout"
+            f"status=handshake_timeout, elapsed={_elapsed_seconds(started)}s"
         )
     except OSError as exc:
         return (
             f"url={ws_url}, origin={origin or '-'}, protocol={'yes' if protocol else 'no'}, "
             "status=handshake_failed, "
-            f"error={type(exc).__name__}: {exc}"
+            f"elapsed={_elapsed_seconds(started)}s, error={type(exc).__name__}: {exc}"
         )
 
     first_line = response.splitlines()[0] if response else ""
@@ -382,7 +394,7 @@ def _check_ws_handshake(
         status = "handshake_empty"
     return (
         f"url={ws_url}, origin={origin or '-'}, protocol={'yes' if protocol else 'no'}, "
-        f"status={status}, response={first_line[:160]}"
+        f"status={status}, elapsed={_elapsed_seconds(started)}s, response={first_line[:160]}"
     )
 
 
@@ -440,9 +452,19 @@ def _open_upstream_websocket(
     )
     request = "\r\n".join(headers) + "\r\n\r\n"
 
-    sock = socket.create_connection((host, port), timeout=5.0)
+    started = time.monotonic()
     try:
-        sock.settimeout(5.0)
+        sock = socket.create_connection(
+            (host, port),
+            timeout=PREVIEW_TCP_CONNECT_TIMEOUT_SECONDS,
+        )
+    except OSError as exc:
+        raise OSError(
+            f"upstream tcp connect failed after {_elapsed_seconds(started)}s: {exc}"
+        ) from exc
+
+    try:
+        sock.settimeout(PREVIEW_UPSTREAM_HANDSHAKE_TIMEOUT_SECONDS)
         sock.sendall(request.encode("ascii"))
         response, initial_data = _recv_http_headers(sock)
         first_line = response.splitlines()[0] if response else ""
@@ -454,6 +476,11 @@ def _open_upstream_websocket(
             headers=_parse_http_headers(response),
             initial_data=initial_data,
         )
+    except TimeoutError as exc:
+        sock.close()
+        raise TimeoutError(
+            f"upstream handshake timed out after {_elapsed_seconds(started)}s"
+        ) from exc
     except Exception:
         sock.close()
         raise
@@ -536,6 +563,10 @@ def _protocol_requested_by_client(requested: str, selected: str) -> bool:
         selected
         and selected in {item.strip() for item in requested.split(",") if item.strip()}
     )
+
+
+def _elapsed_seconds(started: float) -> str:
+    return f"{time.monotonic() - started:.2f}"
 
 
 def _relay_websocket(client: socket.socket, upstream: socket.socket) -> None:
