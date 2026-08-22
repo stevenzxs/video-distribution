@@ -502,7 +502,9 @@ Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流�
 或网络路由。
 TCP 可达时还会做一次标准 WebSocket Upgrade 握手检查；`handshake_timeout`
 表示 8003 没有响应握手，`handshake_rejected` 表示服务端明确拒绝握手，
-需要继续检查取流服务的 WebSocket 协议、Origin 限制或连接路径。
+需要继续检查取流服务的 WebSocket 协议、Origin 限制或连接路径。后端会分别记录
+带 `Origin` 与不带 `Origin` 的握手结果；如果两者都超时，优先检查 8003 的实际
+WebSocket 入口、path/query/subprotocol 或取流服务状态。
 
 如果 `GetDisplayWallInfo` 返回 `resource not exist`，说明目标大屏墙还没有创建
 或名称不匹配。矩阵控制台应先调用 `CreateDisplayWall` 按解码器数量创建大屏，

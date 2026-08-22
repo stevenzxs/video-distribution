@@ -273,4 +273,6 @@ Web 预览会自动尝试 `MATRIX_CONFIG["stream_versions"]` 中配置的取流�
 WebSocket 取流端口 `8003`，应检查服务器取流服务、防火墙或网络路由。
 如果 TCP 可达但 `预览取流握手检查` 显示 `handshake_timeout` 或
 `handshake_rejected`，说明 8003 端口不是正常响应浏览器 WebSocket Upgrade，
-需要继续查取流服务的 WebSocket 握手要求、Origin 限制或连接路径。
+需要继续查取流服务的 WebSocket 握手要求、Origin 限制或连接路径。后端会分别
+记录带 `Origin` 和不带 `Origin` 的握手结果：如果两者都是 `handshake_timeout`，
+通常不是跨域限制，而是该端口未按标准 WebSocket 握手响应当前连接地址。

@@ -59,10 +59,11 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
                     _check_ws_port(str(payload.get("ws_url", ""))),
                 )
                 origin = f"http://{self.headers.get('Host')}" if self.headers.get("Host") else ""
-                logger.info(
-                    "预览取流握手检查: %s",
-                    _check_ws_handshake(str(payload.get("ws_url", "")), origin=origin),
-                )
+                for handshake_result in _check_ws_handshakes(
+                    str(payload.get("ws_url", "")),
+                    origin=origin,
+                ):
+                    logger.info("预览取流握手检查: %s", handshake_result)
             self._send_json({"result": "success", "result_val": 0})
             return
 
@@ -200,6 +201,14 @@ def _check_ws_port(ws_url: str) -> str:
             return f"url={ws_url}, status=tcp_ok"
     except OSError as exc:
         return f"url={ws_url}, status=tcp_failed, error={type(exc).__name__}: {exc}"
+
+
+def _check_ws_handshakes(ws_url: str, origin: str = "") -> List[str]:
+    results = []
+    if origin:
+        results.append(_check_ws_handshake(ws_url, origin=origin))
+    results.append(_check_ws_handshake(ws_url, origin=""))
+    return results
 
 
 def _check_ws_handshake(ws_url: str, origin: str = "") -> str:

@@ -1,5 +1,6 @@
 from web_server import (
     _check_ws_handshake,
+    _check_ws_handshakes,
     _preview_event_needs_port_check,
     _preview_event_summary,
 )
@@ -42,3 +43,21 @@ def test_preview_event_needs_port_check_for_zero_frame_connection_failure():
 
 def test_check_ws_handshake_reports_invalid_url():
     assert _check_ws_handshake("").endswith("status=invalid_url")
+
+
+def test_check_ws_handshakes_checks_with_and_without_origin(monkeypatch):
+    calls = []
+
+    def fake_check(ws_url, origin=""):
+        calls.append((ws_url, origin))
+        return f"origin={origin or '-'}"
+
+    monkeypatch.setattr("web_server._check_ws_handshake", fake_check)
+
+    results = _check_ws_handshakes("ws://example.test:8003", origin="http://127.0.0.1:8080")
+
+    assert results == ["origin=http://127.0.0.1:8080", "origin=-"]
+    assert calls == [
+        ("ws://example.test:8003", "http://127.0.0.1:8080"),
+        ("ws://example.test:8003", ""),
+    ]
