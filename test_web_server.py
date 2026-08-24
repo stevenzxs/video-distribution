@@ -22,7 +22,7 @@ def test_preview_event_summary_includes_key_fields():
         "output": 1,
         "event": "first_frame",
         "control_ws_url": (
-            "ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81"
+            "ws://192.168.130.101:8001/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81"
         ),
         "ws_url": "ws://192.168.130.101:12997/play",
         "connect_url": "ws://127.0.0.1:8080/api/preview/ws?output=1",
@@ -36,7 +36,7 @@ def test_preview_event_summary_includes_key_fields():
 
     assert "output=1" in summary
     assert "event=first_frame" in summary
-    assert "control_ws_url=ws://192.168.130.101:8003/?display_wall=" in summary
+    assert "control_ws_url=ws://192.168.130.101:8001/?display_wall=" in summary
     assert "ws_url=ws://192.168.130.101:12997/play" in summary
     assert "connect_url=ws://127.0.0.1:8080/api/preview/ws?output=1" in summary
     assert "channel=6c-df-fb-01-5e-80-00-01/v1" in summary

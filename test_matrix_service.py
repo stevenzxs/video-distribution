@@ -402,7 +402,7 @@ def test_stream_channel_appends_default_suffix_to_physical_mac():
     )
 
     assert stream["control_ws_url"] == (
-        "ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81"
+        "ws://192.168.130.101:8001/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81"
     )
     assert stream["ws_url"] == "ws://192.168.130.101:12997/play"
     assert stream["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
@@ -469,7 +469,7 @@ def test_scheduler_opens_expected_output_window_from_display_wall_list():
     assert fake.created_walls == []
     assert route["stream"]["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
     assert route["stream"]["control_ws_url"] == (
-        "ws://192.168.130.101:8003/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A82"
+        "ws://192.168.130.101:8001/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A82"
     )
     assert route["stream"]["ws_url"] == "ws://192.168.130.101:12997/play"
     assert route["stream"]["ws_proxy_path"] == "/api/preview/ws?output=2"

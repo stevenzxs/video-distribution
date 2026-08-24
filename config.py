@@ -8,14 +8,17 @@ API_SERVER_PORT = 8001
 API_BASE_URL = f"http://{API_SERVER_HOST}:{API_SERVER_PORT}"
 
 # WebSocket配置
-# 8003 带 display_wall 查询参数时是平台页面调度大屏的控制 WebSocket，
+# 抓包确认（docs/ws.txt）：视频调度确认控制 WebSocket 与 HTTP API 同在 8001 端口，
+# 带 display_wall 查询参数，握手需 Sec-WebSocket-Protocol 携带登录 token，
 # 返回 {"result":"success","result_val":0}。
-WS_CONTROL_SERVER_PORT = 8003
+# 注意：旧文档中 8003 是历史记录，实测连接 8003 会被对端静默挂起约 15 秒后
+# 空响应关闭（对端 keep-alive timeout=15），握手永远等不到 101。
+WS_CONTROL_SERVER_PORT = 8001
 WS_CONTROL_BASE_URL = f"ws://{API_SERVER_HOST}:{WS_CONTROL_SERVER_PORT}"
 # 抓包确认 12997/play 是取码流 WebSocket，101 后发送 open_header 并接收二进制帧。
 WS_STREAM_SERVER_PORT = 12997
 WS_STREAM_BASE_URL = f"ws://{API_SERVER_HOST}:{WS_STREAM_SERVER_PORT}/play"
-# 兼容旧代码引用：旧的 WS_BASE_URL 表示 8003 控制入口。
+# 兼容旧代码引用：旧的 WS_BASE_URL 表示 8001 控制入口。
 WS_SERVER_PORT = WS_CONTROL_SERVER_PORT
 WS_BASE_URL = WS_CONTROL_BASE_URL
 

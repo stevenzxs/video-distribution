@@ -1,0 +1,52 @@
+请求网址
+ws://192.168.130.101:8001/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81
+请求方法
+GET
+状态代码
+
+access-control-allow-credentials
+true
+access-control-allow-origin
+http://192.168.130.101:8001
+connection
+Upgrade
+date
+Tue, Jan 06 1970 08:07:37 GMT
+keep-alive
+timeout=15, max=100
+sec-websocket-accept
+kPMGOcG8T/m0udQhbRE6kzuTqRg=
+sec-websocket-protocol
+<登录token>
+server
+build in Jan 7 2026 17:49:07
+upgrade
+websocket
+
+
+accept-encoding
+gzip, deflate
+accept-language
+zh-CN,zh;q=0.9
+cache-control
+no-cache
+connection
+Upgrade
+host
+192.168.130.101:8001
+origin
+http://192.168.130.101:8001
+pragma
+no-cache
+sec-websocket-extensions
+permessage-deflate; client_max_window_bits
+sec-websocket-key
+emA7c8KRVaDbk6Zt3Z10sg==
+sec-websocket-protocol
+<登录token>
+sec-websocket-version
+13
+upgrade
+websocket
+user-agent
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36

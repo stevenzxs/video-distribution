@@ -95,6 +95,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "missing Sec-WebSocket-Key"}, 400)
             return
 
+        stage = "control" if control_url else "stream"
         try:
             if control_url:
                 control_result = _call_preview_control_ws(
@@ -109,6 +110,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
                     control_url,
                     _preview_control_result_summary(control_result),
                 )
+                stage = "stream"
             upstream = _open_upstream_websocket(
                 upstream_url,
                 origin=API_BASE_URL,
@@ -119,11 +121,13 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         except OSError as exc:
             logger.error(
                 (
-                    "预览代理连接上游失败: output=%s, control_url=%s, url=%s, "
+                    "预览代理连接上游失败: output=%s, stage=%s, "
+                    "control_url=%s, url=%s, "
                     "control_protocol=%s, stream_protocol=%s, "
                     "extensions=%s, timeout=%ss, error=%s: %s"
                 ),
                 output,
+                "调度确认" if stage == "control" else "取流",
                 control_url,
                 upstream_url,
                 "yes" if control_protocol else "no",
