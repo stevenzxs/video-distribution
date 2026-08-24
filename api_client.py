@@ -19,6 +19,12 @@ def _json_bytes(data: Optional[Dict]) -> Optional[bytes]:
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
+def _json_log_text(body: Optional[bytes]) -> str:
+    if not body:
+        return "{}"
+    return body.decode("utf-8", errors="replace")
+
+
 def is_success_response(result: Optional[Dict[str, Any]]) -> bool:
     """判断API响应是否成功。"""
     return (
@@ -112,19 +118,25 @@ class APIClient:
             headers["token"] = self.token
 
         try:
-            logger.info(f"请求 {endpoint}")
-            logger.debug(f"请求数据: {data}")
+            body = _json_bytes(data)
+            logger.info(
+                "请求 %s: url=%s, token=%s, body=%s",
+                endpoint,
+                url,
+                headers.get("token", ""),
+                _json_log_text(body),
+            )
 
             response = self.session.post(
                 url,
-                data=_json_bytes(data),
+                data=body,
                 headers=headers,
                 timeout=self.timeout
             )
             response.raise_for_status()
 
             result = response.json()
-            logger.debug(f"响应数据: {result}")
+            logger.info("%s返回: %s", endpoint, result)
 
             # 检查业务错误码（result 为 "success" 或 result_val 为 0 表示成功）
             if not is_success_response(result):

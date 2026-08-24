@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 
@@ -100,15 +101,16 @@ def test_login_calls_display_wall_wnds_once_with_raw_body():
     )
 
 
-def test_make_request_uses_raw_utf8_json_bytes():
+def test_make_request_uses_raw_utf8_json_bytes(caplog):
     client = APIClient(base_url="http://example.invalid")
     client.session = LoginProbeSession()
     client.token = "request-token"
 
-    result = client._make_request(
-        "/mvapi/v1/example",
-        {"display_wall": "显示器1"},
-    )
+    with caplog.at_level(logging.INFO, logger="api_client"):
+        result = client._make_request(
+            "/mvapi/v1/example",
+            {"display_wall": "显示器1"},
+        )
 
     assert result == {"result": "success", "result_val": 0, "wnds": []}
     assert len(client.session.calls) == 1
@@ -122,6 +124,10 @@ def test_make_request_uses_raw_utf8_json_bytes():
     assert json.loads(body) == {"display_wall": "显示器1"}
     assert "显示器1" in body
     assert "\\u" not in body
+    assert "请求 /mvapi/v1/example" in caplog.text
+    assert "request-token" in caplog.text
+    assert '"display_wall": "显示器1"' in caplog.text
+    assert "/mvapi/v1/example返回" in caplog.text
 
 
 @pytest.fixture(autouse=True)

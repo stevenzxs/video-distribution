@@ -265,7 +265,7 @@ async function onOutputClick(event) {
 
   state.selectedOutputs.add(output);
   renderAll();
-  dispatch([output]);
+  await dispatch([output]);
 }
 
 async function onRouteCellClick(event) {
@@ -287,7 +287,7 @@ async function onRouteCellClick(event) {
   state.selectedInput = input;
   state.selectedOutputs.add(output);
   renderAll();
-  dispatch([output]);
+  await dispatch([output]);
 }
 
 async function closeOutput(output) {
@@ -1145,7 +1145,10 @@ function setDispatchState(type, text) {
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    cache: "no-store",
+    ...options,
+  });
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.result || data.error || response.statusText);

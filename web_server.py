@@ -13,6 +13,7 @@ import mimetypes
 import os
 import select
 import socket
+import sys
 import time
 from dataclasses import dataclass
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -41,7 +42,16 @@ PREVIEW_CONTROL_PULSE_RESULT_TIMEOUT_SECONDS = 2.0
 PREVIEW_CONTROL_PULSE_TEXT = "pulse"
 PREVIEW_BROWSER_WS_EXTENSIONS = "permessage-deflate; client_max_window_bits"
 
-logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=LOG_LEVEL,
+        format=LOG_FORMAT,
+        stream=sys.stdout,
+        force=True,
+    )
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +73,12 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed_path = urlparse(self.path)
         path = parsed_path.path
+        logger.info(
+            "收到GET: path=%s, query=%s, host=%s",
+            path,
+            parsed_path.query or "-",
+            self.headers.get("Host", "-"),
+        )
         if path == "/api/preview/ws":
             self._proxy_preview_ws(parsed_path.query)
             return
@@ -220,6 +236,12 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        logger.info(
+            "收到POST: path=%s, content_length=%s, content_type=%s",
+            path,
+            self.headers.get("Content-Length", "0"),
+            self.headers.get("Content-Type", "-"),
+        )
         if path == "/api/preview/event":
             payload = self._read_json()
             logger.info("预览事件: %s", _preview_event_summary(payload))
@@ -241,6 +263,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/matrix/output/close":
             try:
                 payload = self._read_json()
+                logger.info("关闭输出请求: payload=%s", payload)
                 output = _output_from_payload(payload)
                 result = self.scheduler.close_output(output)
                 self._send_json(result)
@@ -264,7 +287,9 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
 
         try:
             payload = self._read_json()
+            logger.info("矩阵切换请求: payload=%s", payload)
             commands = _commands_from_payload(payload)
+            logger.info("矩阵切换命令: %s", commands)
             routes = [self.scheduler.switch_command(command) for command in commands]
             self._send_json({"result": "success", "result_val": 0, "routes": routes})
         except MatrixError as exc:
@@ -285,6 +310,11 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
+        logger.info(
+            "收到JSON请求体: path=%s, body=%s",
+            urlparse(self.path).path,
+            raw.decode("utf-8", errors="replace"),
+        )
         return json.loads(raw.decode("utf-8"))
 
     def _send_json(self, payload: Dict[str, Any], status: int = 200) -> None:
@@ -295,6 +325,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -306,6 +337,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
     def _serve_file(self, path: Path) -> None:
@@ -320,6 +352,7 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
         except OSError as exc:
@@ -1137,6 +1170,7 @@ def _preview_ws_frame_sample_from_bytes(data: bytes) -> str:
 
 
 def main() -> None:
+    _configure_logging()
     parser = argparse.ArgumentParser(description="分布式视频矩阵 Web 控制台")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
