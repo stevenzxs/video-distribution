@@ -732,6 +732,46 @@ def test_scheduler_reuses_login_for_consecutive_switches():
     assert fake.closed_windows == []
 
 
+def test_scheduler_close_output_closes_active_window_and_clears_assignment():
+    fake = FakeAPIClient()
+    runtime_state = MatrixRuntimeState()
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=runtime_state,
+    )
+
+    route = scheduler.switch_command("1v1.")
+    result = scheduler.close_output(1)
+
+    assert route["window"]["result"]["handle"] == 1001
+    assert fake.closed_windows == [1001]
+    assert result["result"] == "success"
+    assert result["result_val"] == 0
+    assert result["output"] == 1
+    assert result["display_wall"] == "显示器1"
+    assert result["handle"] == 1001
+    assert runtime_state.assignment(1) is None
+
+
+def test_scheduler_close_output_without_assignment_is_noop_success():
+    fake = FakeAPIClient()
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    result = scheduler.close_output(1)
+
+    assert result == {
+        "result": "success",
+        "result_val": 0,
+        "output": 1,
+        "closed": False,
+        "reason": "no_assignment",
+    }
+    assert fake.closed_windows == []
+
+
 def test_scheduler_replaces_existing_output_window_source():
     fake = FakeAPIClient(windows=[
         {

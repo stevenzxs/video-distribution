@@ -8,6 +8,7 @@ from web_server import (
     _parse_http_headers,
     _parse_preview_control_payload,
     _preview_upstream_handshake_headers,
+    _output_from_payload,
     _preview_output_from_query,
     _preview_event_needs_port_check,
     _preview_event_summary,
@@ -92,6 +93,12 @@ def test_check_ws_handshakes_checks_with_and_without_origin(monkeypatch):
 def test_preview_output_from_query():
     assert _preview_output_from_query("output=2") == 2
     assert _preview_output_from_query("output=bad") == 0
+
+
+def test_output_from_payload():
+    assert _output_from_payload({"output": "2"}) == 2
+    with pytest.raises(Exception):
+        _output_from_payload({"output": "bad"})
 
 
 def test_preview_stream_for_output_reads_current_assignment():

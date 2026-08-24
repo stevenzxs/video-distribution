@@ -243,16 +243,15 @@ function onInputClick(event) {
   if (!button || state.busy) {
     return;
   }
-  state.selectedInput = Number(button.dataset.input);
-  renderAll();
-
-  const outputs = [...state.selectedOutputs];
-  if (outputs.length) {
-    dispatch(outputs);
+  const nextInput = Number(button.dataset.input);
+  if (state.selectedInput !== nextInput) {
+    state.selectedInput = nextInput;
+    state.selectedOutputs.clear();
   }
+  renderAll();
 }
 
-function onOutputClick(event) {
+async function onOutputClick(event) {
   const button = event.target.closest("[data-output]");
   if (!button || state.busy) {
     return;
@@ -260,8 +259,7 @@ function onOutputClick(event) {
 
   const output = Number(button.dataset.output);
   if (state.selectedOutputs.has(output)) {
-    state.selectedOutputs.delete(output);
-    renderAll();
+    await closeOutput(output);
     return;
   }
 
@@ -270,7 +268,7 @@ function onOutputClick(event) {
   dispatch([output]);
 }
 
-function onRouteCellClick(event) {
+async function onRouteCellClick(event) {
   const button = event.target.closest("[data-input][data-output]");
   if (!button || state.busy) {
     return;
@@ -278,10 +276,54 @@ function onRouteCellClick(event) {
 
   const input = Number(button.dataset.input);
   const output = Number(button.dataset.output);
+  if (state.selectedInput === input && state.selectedOutputs.has(output)) {
+    await closeOutput(output);
+    return;
+  }
+
+  if (state.selectedInput !== input) {
+    state.selectedOutputs.clear();
+  }
   state.selectedInput = input;
   state.selectedOutputs.add(output);
   renderAll();
   dispatch([output]);
+}
+
+async function closeOutput(output) {
+  state.busy = true;
+  renderButtons();
+  renderRouteGrid();
+  setDispatchState("busy", `关闭输出${output}`);
+
+  try {
+    const response = await fetchJson("/api/matrix/output/close", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({output}),
+    });
+
+    if (!isApiSuccess(response)) {
+      throw new Error(response.result || `关闭输出${output}失败`);
+    }
+
+    state.selectedOutputs.delete(output);
+    stopPreview(output);
+    const screen = state.screens.find((item) => item.index === output);
+    if (screen) {
+      screen.assignment = null;
+    }
+    renderScreens();
+    setDispatchState("ok", `已关闭输出${output}`);
+  } catch (error) {
+    setDispatchState("error", error.message);
+  } finally {
+    state.busy = false;
+    renderButtons();
+    renderRouteGrid();
+    renderPendingCommand();
+    renderHistory();
+  }
 }
 
 async function dispatch(outputs) {
@@ -353,6 +395,16 @@ function startPreview(route) {
   const receiver = new PreviewReceiver(outputIndex, route.stream);
   previewReceivers.set(outputIndex, receiver);
   receiver.start();
+}
+
+function stopPreview(outputIndex) {
+  const receiver = previewReceivers.get(outputIndex);
+  if (!receiver) {
+    return;
+  }
+
+  receiver.stop();
+  previewReceivers.delete(outputIndex);
 }
 
 class PreviewReceiver {

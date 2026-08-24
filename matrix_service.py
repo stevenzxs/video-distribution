@@ -114,6 +114,10 @@ class MatrixRuntimeState:
         with self._lock:
             return self._assignments.get(output_index)
 
+    def clear(self, output_index: int) -> None:
+        with self._lock:
+            self._assignments.pop(output_index, None)
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             assignments = {
@@ -247,6 +251,55 @@ class MatrixScheduler:
                 output.get("mac"),
             )
             return route
+
+    def close_output(self, output_index: int) -> Dict[str, Any]:
+        with self._client_lock:
+            route = self.runtime_state.assignment(output_index)
+            if not isinstance(route, dict):
+                return {
+                    "result": "success",
+                    "result_val": 0,
+                    "output": output_index,
+                    "closed": False,
+                    "reason": "no_assignment",
+                }
+
+            display_wall = str(route.get("display_wall") or "").strip()
+            if not display_wall:
+                raise MatrixError(f"输出{output_index}缺少大屏名称，无法关闭窗口", 400)
+
+            window = route.get("window") if isinstance(route.get("window"), dict) else {}
+            window_result = window.get("result") if isinstance(window.get("result"), dict) else {}
+            handle = _optional_int(_first_value(window_result, WINDOW_HANDLE_KEYS))
+            if handle is None:
+                handle = _optional_int(_first_value(window, WINDOW_HANDLE_KEYS))
+            if handle is None:
+                raise MatrixError(f"输出{output_index}缺少窗口句柄，无法关闭窗口", 400)
+
+            logger.info(
+                "关闭输出%d窗口: display_wall=%s, handle=%s",
+                output_index,
+                display_wall,
+                handle,
+            )
+            client = self._authenticated_client()
+            result = client.close_wnd(display_wall, handle)
+            if not is_success_response(result) and result.get("result_val") != 13:
+                raise MatrixError(
+                    f"关闭输出{output_index}窗口 handle={handle} 失败 {format_api_error(result)}",
+                    502,
+                )
+
+            self.runtime_state.clear(output_index)
+            return {
+                "result": "success",
+                "result_val": 0,
+                "output": output_index,
+                "display_wall": display_wall,
+                "handle": handle,
+                "closed": is_success_response(result),
+                "close_result": result,
+            }
 
     def _authenticated_client(self) -> APIClient:
         if self._client is None:

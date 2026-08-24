@@ -238,6 +238,26 @@ class MatrixHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"result": "success", "result_val": 0})
             return
 
+        if path == "/api/matrix/output/close":
+            try:
+                payload = self._read_json()
+                output = _output_from_payload(payload)
+                result = self.scheduler.close_output(output)
+                self._send_json(result)
+            except MatrixError as exc:
+                logger.warning("关闭输出窗口失败: %s", exc)
+                self._send_json(
+                    {"result": str(exc), "result_val": 3},
+                    exc.status_code,
+                )
+            except Exception as exc:
+                logger.exception("关闭输出窗口失败")
+                self._send_json(
+                    {"result": f"关闭输出窗口失败: {exc}", "result_val": 8},
+                    500,
+                )
+            return
+
         if path != "/api/matrix/switch":
             self._send_json({"error": "not found"}, 404)
             return
@@ -332,6 +352,16 @@ def _commands_from_payload(payload: Dict[str, Any]) -> List[str]:
             raise MatrixError("输出编号必须为数字")
         commands.append(f"{input_index}v{output_index}.")
     return commands
+
+
+def _output_from_payload(payload: Dict[str, Any]) -> int:
+    try:
+        output = int(payload.get("output"))
+    except (TypeError, ValueError):
+        raise MatrixError("缺少输出编号")
+    if output < 1:
+        raise MatrixError("输出编号必须大于0")
+    return output
 
 
 def _preview_event_summary(payload: Dict[str, Any]) -> str:
