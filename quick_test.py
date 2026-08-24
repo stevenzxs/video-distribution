@@ -4,6 +4,7 @@
 """
 import sys
 import io
+import json
 import requests
 import hashlib
 import time
@@ -61,7 +62,7 @@ def test_connection():
     try:
         response = requests.post(
             login_url,
-            json=login_data,
+            data=json.dumps(login_data, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json; charset=utf-8"},
             timeout=10
         )
@@ -83,7 +84,7 @@ def test_connection():
 
             version_response = requests.post(
                 version_url,
-                json={},
+                data=json.dumps({}, ensure_ascii=False).encode("utf-8"),
                 headers={
                     "Content-Type": "application/json; charset=utf-8",
                     "token": result.get('token')

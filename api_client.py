@@ -2,6 +2,7 @@
 API客户端封装
 """
 import hashlib
+import json
 import time
 import requests
 import logging
@@ -9,6 +10,13 @@ from typing import Dict, Any, Optional
 from config import API_BASE_URL, REQUEST_TIMEOUT
 
 logger = logging.getLogger(__name__)
+LOGIN_WNDS_DISPLAY_WALL = "显示器1"
+
+
+def _json_bytes(data: Optional[Dict]) -> Optional[bytes]:
+    if data is None:
+        return None
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
 def is_success_response(result: Optional[Dict[str, Any]]) -> bool:
@@ -109,7 +117,7 @@ class APIClient:
 
             response = self.session.post(
                 url,
-                json=data,
+                data=_json_bytes(data),
                 headers=headers,
                 timeout=self.timeout
             )
@@ -133,6 +141,60 @@ class APIClient:
         except ValueError as e:
             logger.error(f"JSON解析失败: {e}")
             raise
+
+    def _display_wall_wnds_body(self, display_wall: str) -> bytes:
+        data = {
+            "display_wall": display_wall,
+            "token": self.token or "",
+        }
+        return _json_bytes(data) or b""
+
+    def _post_display_wall_wnds_raw_body(self, display_wall: str) -> Dict[str, Any]:
+        endpoint = "/mvapi/v1/wnd/GetDisplayWallWnds"
+        url = f"{self.base_url}{endpoint}"
+        headers = {}
+        if self.token:
+            headers["token"] = self.token
+        body = self._display_wall_wnds_body(display_wall)
+
+        logger.info(
+            (
+                "GetDisplayWallWnds raw body请求: url=%s, display_wall=%s, "
+                "header token=%s, body token=%s, timeout=%s, body=%s"
+            ),
+            url,
+            display_wall,
+            headers.get("token"),
+            self.token,
+            self.timeout,
+            body.decode("utf-8", errors="replace"),
+        )
+
+        response = self.session.post(
+            url,
+            data=body,
+            headers=headers,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info("GetDisplayWallWnds返回: %s", result)
+        if not is_success_response(result):
+            logger.error("GetDisplayWallWnds业务错误 %s", format_api_error(result))
+        return result
+
+    def _probe_display_wall_wnds_after_login(self) -> None:
+        """登录后直接查询一次窗口列表，body 使用 raw JSON。"""
+        if not self.token:
+            logger.warning("登录后跳过GetDisplayWallWnds探测: token为空")
+            return
+
+        try:
+            self._post_display_wall_wnds_raw_body(LOGIN_WNDS_DISPLAY_WALL)
+        except requests.exceptions.RequestException as e:
+            logger.error("登录后GetDisplayWallWnds请求异常: %s", e)
+        except ValueError as e:
+            logger.error("登录后GetDisplayWallWnds响应JSON解析失败: %s", e)
 
     def login(self, username: str, password: str) -> bool:
         """
@@ -158,7 +220,8 @@ class APIClient:
 
         if is_success_response(result):
             self.token = result.get("token")
-            logger.info(f"登录成功，用户: {username}, 权限: {result.get('right')}")
+            logger.info(f"登录成功，用户: {username}, 权限: {result.get('right')}, token: {self.token}")
+            self._probe_display_wall_wnds_after_login()
             return True
         else:
             logger.error(f"登录失败 {format_api_error(result)}")
@@ -380,10 +443,7 @@ class APIClient:
 
     def get_display_wall_wnds(self, display_wall: str) -> Dict[str, Any]:
         """获取大屏所有窗口信息"""
-        data = {"display_wall": display_wall}
-        if self.token:
-            data["token"] = self.token
-        return self._make_request("/mvapi/v1/wnd/GetDisplayWallWnds", data)
+        return self._post_display_wall_wnds_raw_body(display_wall)
 
     def open_wnd(self, display_wall: str, src_mac: str,
                  pos_x: int, pos_y: int, width: int, height: int) -> Dict[str, Any]:

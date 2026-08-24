@@ -1,7 +1,13 @@
+import json
+
 import pytest
 
 import matrix_service as matrix_service_module
-from api_client import APIClient, is_success_response
+from api_client import (
+    APIClient,
+    LOGIN_WNDS_DISPLAY_WALL,
+    is_success_response,
+)
 from config import MATRIX_CONFIG
 from matrix_service import (
     MatrixError,
@@ -22,6 +28,100 @@ class CapturingAPIClient(APIClient):
         self.last_endpoint = endpoint
         self.last_data = data
         return {"result": "success", "result_val": 0}
+
+
+class LoginProbeResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"result": "success", "result_val": 0, "wnds": []}
+
+
+class LoginProbeSession:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return LoginProbeResponse()
+
+
+def assert_raw_body_display_wall_wnds_call(
+    call,
+    *,
+    base_url,
+    display_wall,
+    token,
+    timeout,
+):
+    url, kwargs = call
+    assert url == f"{base_url}/mvapi/v1/wnd/GetDisplayWallWnds"
+    assert "json" not in kwargs
+    assert kwargs["timeout"] == timeout
+
+    assert kwargs["headers"] == {"token": token}
+
+    body = kwargs["data"].decode("utf-8")
+    assert json.loads(body) == {
+        "display_wall": display_wall,
+        "token": token,
+    }
+    assert display_wall in body
+    assert "\\u" not in body
+
+
+def test_login_calls_display_wall_wnds_once_with_raw_body():
+    class LoginProbeClient(APIClient):
+        def __init__(self):
+            super().__init__(base_url="http://example.invalid")
+            self.session = LoginProbeSession()
+
+        def _make_request(self, endpoint, data=None, use_token=True):
+            assert endpoint == "/mvapi/v1/Login"
+            assert use_token is False
+            return {
+                "result": "success",
+                "result_val": 0,
+                "token": "login-token",
+                "right": 0,
+            }
+
+    client = LoginProbeClient()
+
+    assert client.login("admin", "123456") is True
+    assert len(client.session.calls) == 1
+    assert_raw_body_display_wall_wnds_call(
+        client.session.calls[0],
+        base_url="http://example.invalid",
+        display_wall=LOGIN_WNDS_DISPLAY_WALL,
+        token="login-token",
+        timeout=30,
+    )
+
+
+def test_make_request_uses_raw_utf8_json_bytes():
+    client = APIClient(base_url="http://example.invalid")
+    client.session = LoginProbeSession()
+    client.token = "request-token"
+
+    result = client._make_request(
+        "/mvapi/v1/example",
+        {"display_wall": "显示器1"},
+    )
+
+    assert result == {"result": "success", "result_val": 0, "wnds": []}
+    assert len(client.session.calls) == 1
+    url, kwargs = client.session.calls[0]
+    assert url == "http://example.invalid/mvapi/v1/example"
+    assert "json" not in kwargs
+    assert kwargs["headers"] == {"token": "request-token"}
+    assert kwargs["timeout"] == 30
+
+    body = kwargs["data"].decode("utf-8")
+    assert json.loads(body) == {"display_wall": "显示器1"}
+    assert "显示器1" in body
+    assert "\\u" not in body
 
 
 @pytest.fixture(autouse=True)
@@ -407,13 +507,21 @@ def test_bind_decoder_payload_matches_platform_shape():
 
 
 def test_display_wall_wnds_payload_uses_display_wall_field():
-    client = CapturingAPIClient()
+    client = APIClient(base_url="http://example.invalid")
+    client.session = LoginProbeSession()
     client.token = "body-token"
 
-    client.get_display_wall_wnds("VW3")
+    result = client.get_display_wall_wnds("VW3")
 
-    assert client.last_endpoint == "/mvapi/v1/wnd/GetDisplayWallWnds"
-    assert client.last_data == {"display_wall": "VW3", "token": "body-token"}
+    assert result == {"result": "success", "result_val": 0, "wnds": []}
+    assert len(client.session.calls) == 1
+    assert_raw_body_display_wall_wnds_call(
+        client.session.calls[0],
+        base_url="http://example.invalid",
+        display_wall="VW3",
+        token="body-token",
+        timeout=30,
+    )
 
 
 def test_other_api_payloads_do_not_add_token_to_body():
