@@ -128,9 +128,30 @@ def test_parse_preview_control_payload_rejects_non_json():
         _parse_preview_control_payload(b"not json")
 
 
+def test_call_preview_control_ws_ignores_pulse_before_success(monkeypatch):
+    success = b'{"result":"success","result_val":0}'
+    sock = FakeSocket([
+        _server_text_frame(b"pulse"),
+        _server_text_frame(success),
+    ])
+
+    def fake_open(*args, **kwargs):
+        return UpstreamWebSocket(sock=sock, headers={})
+
+    monkeypatch.setattr("web_server._open_upstream_websocket", fake_open)
+
+    result = _call_preview_control_ws(
+        "ws://example.test:8001/?display_wall=one",
+        origin="http://example.test:8001",
+        protocol="fake-token",
+    )
+
+    assert result == {"result": "success", "result_val": 0}
+
+
 def test_call_preview_control_ws_reads_success_json_frame(monkeypatch):
     payload = b'{"result":"success","result_val":0}'
-    frame = b"\x81" + bytes([len(payload)]) + payload
+    frame = _server_text_frame(payload)
     sock = FakeSocket([frame])
     calls = []
 
@@ -158,7 +179,7 @@ def test_call_preview_control_ws_reads_success_json_frame(monkeypatch):
         "ws_url": "ws://example.test:8003/?display_wall=one",
         "origin": "http://example.test:8001",
         "protocol": "fake-token",
-        "extensions": "",
+        "extensions": "permessage-deflate; client_max_window_bits",
         "user_agent": "FakeBrowser",
     }]
     assert sock.timeout is not None
@@ -167,7 +188,7 @@ def test_call_preview_control_ws_reads_success_json_frame(monkeypatch):
 
 def test_call_preview_control_ws_rejects_failed_result(monkeypatch):
     payload = b'{"result":"failed","result_val":8}'
-    frame = b"\x81" + bytes([len(payload)]) + payload
+    frame = _server_text_frame(payload)
 
     def fake_open(*args, **kwargs):
         return UpstreamWebSocket(sock=FakeSocket([frame]), headers={})
@@ -180,6 +201,34 @@ def test_call_preview_control_ws_rejects_failed_result(monkeypatch):
             origin="http://example.test:8001",
             protocol="fake-token",
         )
+
+
+def test_call_preview_control_ws_continues_when_handshake_stays_idle(monkeypatch):
+    sock = TimeoutSocket()
+
+    def fake_open(*args, **kwargs):
+        return UpstreamWebSocket(sock=sock, headers={}, handshake_elapsed="0.01")
+
+    monkeypatch.setattr("web_server._open_upstream_websocket", fake_open)
+
+    result = _call_preview_control_ws(
+        "ws://example.test:8001/?display_wall=one",
+        origin="http://example.test:8001",
+        protocol="fake-token",
+    )
+
+    assert result == {
+        "result": "success",
+        "result_val": 0,
+        "control_ws_mode": "handshake_only",
+        "reason": "idle_timeout_after_pulse",
+    }
+    assert sock.sent
+    assert sock.sent[0][0] == 0x81
+    assert sock.sent[0][1] & 0x80
+    assert sock.sent[0][1] & 0x7F == len(b"pulse")
+    assert sock.timeout is not None
+    assert sock.closed
 
 
 def test_websocket_accept_key_matches_rfc_example():
@@ -269,6 +318,7 @@ class FakeSocket:
         self.chunks = list(chunks)
         self.timeout = None
         self.closed = False
+        self.sent = []
 
     def settimeout(self, value):
         self.timeout = value
@@ -282,5 +332,20 @@ class FakeSocket:
         self.chunks.insert(0, chunk[size:])
         return chunk[:size]
 
+    def sendall(self, data):
+        self.sent.append(data)
+
     def close(self):
         self.closed = True
+
+
+class TimeoutSocket(FakeSocket):
+    def __init__(self):
+        super().__init__([])
+
+    def recv(self, size):
+        raise TimeoutError("idle websocket")
+
+
+def _server_text_frame(payload):
+    return b"\x81" + bytes([len(payload)]) + payload

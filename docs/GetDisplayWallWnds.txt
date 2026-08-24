@@ -1,0 +1,84 @@
+请求网址
+http://192.168.130.101:8001/mvapi/v1/wnd/GetDisplayWallWnds
+请求方法
+POST
+状态代码
+200 OK
+远程地址
+192.168.130.101:8001
+引荐来源网址政策
+strict-origin-when-cross-origin
+
+
+Access-Control-Allow-Credentials
+true
+Access-Control-Allow-Headers
+*
+Access-Control-Allow-Methods
+*
+Access-Control-Allow-Origin
+*
+Access-Control-Max-Age
+86400
+Connection
+keep-alive
+Content-Length
+242
+Content-Type
+application/json;charset=utf-8
+Date
+Thu, Jan 01 1970 03:26:22 GMT
+Keep-Alive
+timeout=15, max=100
+Server
+build in Jan 7 2026 17:49:07
+Xdomainrequestallowed
+1
+
+
+accept
+application/json, text/plain, */*
+accept-encoding
+gzip, deflate
+accept-language
+zh-CN,zh;q=0.9
+connection
+keep-alive
+content-length
+217
+content-type
+application/json
+host
+192.168.130.101:8001
+origin
+http://192.168.130.101:8001
+referer
+http://192.168.130.101:8001/
+token
+eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjE1NDYwLCJpc3MiOiJhZG1pbiIsImp0aSI6ImU5MjJhMmJlLTdmOWQtNDAxOC04NTQwLWE5YjA2NTdlZmRmYiIsIm5iZiI6MTE4NjB9.Yx4aQhxYLFh2unNgV7hA--rFUuP-vin4IB00vFBl-jE
+user-agent
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36
+
+
+返回值
+{
+    "result": "success",
+    "result_val": 0,
+    "wnds": [
+        {
+            "handle": 1086,
+            "height": 1080,
+            "width": 1920,
+            "x": 0,
+            "y": 0,
+            "layer": 1073741825,
+            "src_type": 2,
+            "type": 0,
+            "src_mac": "6c-df-fb-01-5e-80-00-01",
+            "src_name": "输入1",
+            "src_status": 1,
+            "remote": 0,
+            "language": "zh-cn"
+        }
+    ]
+}

@@ -4,12 +4,17 @@
 负责把前端的 1v1. 指令转换为平台 API 调度：
 输入 N 编码器 -> 输出 N 对应的大屏窗口位置。
 """
+import base64
+import hashlib
+import json
 import logging
+import os
 import re
+import socket
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from api_client import APIClient, format_api_error, is_success_response
@@ -57,6 +62,16 @@ WINDOW_SRC_NAME_KEYS = ("src_name", "srcName", "source_name", "sourceName")
 WINDOW_VERIFY_ATTEMPTS = 3
 WINDOW_VERIFY_DELAY_SECONDS = 0.2
 RESOURCE_NAME_MAX_BYTES = 16
+CONTROL_WS_TCP_CONNECT_TIMEOUT_SECONDS = 3.0
+CONTROL_WS_HANDSHAKE_TIMEOUT_SECONDS = 8.0
+CONTROL_WS_OPTIONAL_RESULT_TIMEOUT_SECONDS = 1.0
+CONTROL_WS_PULSE_RESULT_TIMEOUT_SECONDS = 2.0
+CONTROL_WS_PULSE_TEXT = "pulse"
+CONTROL_WS_EXTENSIONS = "permessage-deflate; client_max_window_bits"
+CONTROL_WS_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+)
 
 
 class MatrixError(Exception):
@@ -76,6 +91,14 @@ class MatrixCommand:
     text: str
 
 
+@dataclass
+class ControlWebSocket:
+    sock: socket.socket
+    initial_data: bytes = b""
+    first_line: str = ""
+    handshake_elapsed: str = ""
+
+
 class MatrixRuntimeState:
     """保存本进程内最后一次调度状态，用于页面回显。"""
 
@@ -86,6 +109,10 @@ class MatrixRuntimeState:
     def record(self, output_index: int, route: Dict[str, Any]) -> None:
         with self._lock:
             self._assignments[output_index] = route
+
+    def assignment(self, output_index: int) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return self._assignments.get(output_index)
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -180,6 +207,7 @@ class MatrixScheduler:
                 display_wall,
                 encoder["mac"],
                 display_wall_record,
+                parsed.output_index,
             )
             stream = build_stream_descriptor(
                 encoder,
@@ -305,6 +333,7 @@ class MatrixScheduler:
         display_wall: str,
         src_mac: str,
         display_wall_record: Dict[str, Any],
+        output_index: int,
     ) -> Dict[str, Any]:
         width = _even_int(
             _first_value(display_wall_record, ("resolution_x", "width"))
@@ -316,6 +345,48 @@ class MatrixScheduler:
         )
         pos_x = 0
         pos_y = 0
+
+        existing_windows = self._get_display_wall_windows(client, display_wall)
+        replaceable_window = _first_replaceable_window(existing_windows)
+        if replaceable_window:
+            return self._replace_output_window_source(
+                client,
+                display_wall,
+                output_index,
+                replaceable_window,
+                src_mac,
+                pos_x,
+                pos_y,
+                width,
+                height,
+                window_source="接口窗口列表",
+                allow_fallback=False,
+            )
+
+        cached_window = self._cached_output_window(
+            output_index,
+            display_wall,
+            pos_x,
+            pos_y,
+            width,
+            height,
+        )
+        if cached_window:
+            replaced = self._replace_output_window_source(
+                client,
+                display_wall,
+                output_index,
+                cached_window,
+                src_mac,
+                pos_x,
+                pos_y,
+                width,
+                height,
+                window_source="本地缓存",
+                allow_fallback=True,
+            )
+            if replaced:
+                return replaced
 
         logger.info(
             "开窗: display_wall=%s, src_mac=%s, pos=(%d,%d), size=%dx%d",
@@ -348,6 +419,112 @@ class MatrixScheduler:
             "width": width,
             "height": height,
             "result": result,
+        }
+
+    def _replace_output_window_source(
+        self,
+        client: APIClient,
+        display_wall: str,
+        output_index: int,
+        window: Dict[str, Any],
+        src_mac: str,
+        pos_x: int,
+        pos_y: int,
+        width: int,
+        height: int,
+        window_source: str,
+        allow_fallback: bool,
+    ) -> Optional[Dict[str, Any]]:
+        handle = _optional_int(_first_value(window, WINDOW_HANDLE_KEYS))
+        if handle is None:
+            return None
+
+        logger.info(
+            "输出%d使用%s窗口替换信号源: display_wall=%s, handle=%s, old=%s, new_src_mac=%s",
+            output_index,
+            window_source,
+            display_wall,
+            handle,
+            _summarize_window(window),
+            src_mac,
+        )
+        result = client.replace_wnd_source(
+            display_wall=display_wall,
+            handle=handle,
+            src_mac=src_mac,
+        )
+        if not is_success_response(result):
+            if allow_fallback:
+                logger.warning(
+                    "输出%d使用%s窗口替换信号源失败，回退开窗: display_wall=%s, "
+                    "handle=%s, new_src_mac=%s, error=%s",
+                    output_index,
+                    window_source,
+                    display_wall,
+                    handle,
+                    src_mac,
+                    format_api_error(result),
+                )
+                return None
+            raise MatrixError(
+                f"替换窗口信号源失败 {format_api_error(result)}，"
+                f"display_wall={display_wall}, handle={handle}, src_mac={src_mac}",
+                502,
+            )
+
+        active_handle = _optional_int(_first_value(result, WINDOW_HANDLE_KEYS)) or handle
+        logger.info("替换窗口信号源结果: %s", _summarize_api_result(result))
+        replaced_window = {**window, "handle": active_handle, "src_mac": src_mac}
+        return {
+            "pos_x": _optional_int(_first_value(window, WINDOW_X_KEYS)) or pos_x,
+            "pos_y": _optional_int(_first_value(window, WINDOW_Y_KEYS)) or pos_y,
+            "width": _optional_int(_first_value(window, WINDOW_WIDTH_KEYS)) or width,
+            "height": _optional_int(_first_value(window, WINDOW_HEIGHT_KEYS)) or height,
+            "result": {
+                **result,
+                "replaced": True,
+                "handle": active_handle,
+            },
+            "replaced_window": _public_window(window),
+            "verified_windows": [_public_window(replaced_window)],
+        }
+
+    def _cached_output_window(
+        self,
+        output_index: int,
+        display_wall: str,
+        pos_x: int,
+        pos_y: int,
+        width: int,
+        height: int,
+    ) -> Optional[Dict[str, Any]]:
+        route = self.runtime_state.assignment(output_index)
+        if not isinstance(route, dict) or route.get("display_wall") != display_wall:
+            return None
+
+        window = route.get("window")
+        if not isinstance(window, dict):
+            return None
+
+        result = window.get("result")
+        if not isinstance(result, dict):
+            return None
+
+        handle = _optional_int(_first_value(result, WINDOW_HANDLE_KEYS))
+        if handle is None:
+            return None
+
+        input_info = route.get("input") if isinstance(route.get("input"), dict) else {}
+        return {
+            "handle": handle,
+            "src_mac": str(input_info.get("mac") or ""),
+            "src_name": str(input_info.get("name") or ""),
+            "src_status": _optional_int(input_info.get("status")),
+            "x": _optional_int(window.get("pos_x")) or pos_x,
+            "y": _optional_int(window.get("pos_y")) or pos_y,
+            "width": _optional_int(window.get("width")) or width,
+            "height": _optional_int(window.get("height")) or height,
+            "layer": None,
         }
 
     def _resolve_device(
@@ -758,12 +935,15 @@ class MatrixScheduler:
         client: APIClient,
         display_wall: str,
     ) -> List[Dict[str, Any]]:
+        self._prime_display_wall_control_ws(client, display_wall)
         result = client.get_display_wall_wnds(display_wall)
         if not is_success_response(result):
-            raise MatrixError(
-                f"获取大屏 {display_wall} 窗口列表失败 {format_api_error(result)}",
-                502,
+            logger.warning(
+                "获取大屏 %s 窗口列表失败，改用本地缓存或开窗流程: %s",
+                display_wall,
+                format_api_error(result),
             )
+            return []
 
         windows = _extract_window_records(result)
         logger.info(
@@ -772,6 +952,29 @@ class MatrixScheduler:
             _summarize_windows(windows),
         )
         return windows
+
+    def _prime_display_wall_control_ws(self, client: APIClient, display_wall: str) -> None:
+        ws_url = _stream_control_ws_url(display_wall)
+        protocol = str(getattr(client, "token", "") or "")
+        try:
+            result = _call_display_wall_control_ws(ws_url, protocol=protocol)
+        except OSError as exc:
+            logger.warning(
+                "查询窗口前控制WS调用失败: display_wall=%s, url=%s, protocol=%s, error=%s: %s",
+                display_wall,
+                ws_url,
+                _control_protocol_summary(protocol),
+                type(exc).__name__,
+                exc,
+            )
+            return
+
+        logger.info(
+            "查询窗口前控制WS调用完成: display_wall=%s, url=%s, result=%s",
+            display_wall,
+            ws_url,
+            _control_ws_result_summary(result),
+        )
 
     def _close_output_windows(
         self,
@@ -1204,6 +1407,15 @@ def _window_source_matches(window: Dict[str, Any], src_mac: str, src_name: str =
     return bool(window_src_name and expected_src_name and window_src_name == expected_src_name)
 
 
+def _first_replaceable_window(windows: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    for window in windows:
+        handle = _optional_int(_first_value(window, WINDOW_HANDLE_KEYS))
+        src_mac = _normalize_mac(_first_value(window, MAC_KEYS) or "")
+        if handle is not None and src_mac:
+            return window
+    return None
+
+
 def _window_rect_matches(
     window: Dict[str, Any],
     pos_x: int,
@@ -1271,6 +1483,397 @@ def _summarize_api_result(result: Any) -> Any:
     keys = ("result", "result_val", "handle")
     summary = {key: result.get(key) for key in keys if key in result}
     return summary or result
+
+
+def _call_display_wall_control_ws(ws_url: str, protocol: str = "") -> Dict[str, Any]:
+    started = time.monotonic()
+    upstream = _open_display_wall_control_ws(ws_url, protocol=protocol)
+    frame_count = 0
+    pulse_sent = False
+    try:
+        upstream.sock.settimeout(CONTROL_WS_OPTIONAL_RESULT_TIMEOUT_SECONDS)
+        frame_buffer = bytearray(upstream.initial_data)
+        logger.info(
+            (
+                "查询窗口前控制WS等待结果: url=%s, protocol=%s, "
+                "handshake_elapsed=%ss, initial_bytes=%d, result_timeout=%ss"
+            ),
+            ws_url,
+            _control_protocol_summary(protocol),
+            upstream.handshake_elapsed or "-",
+            len(upstream.initial_data),
+            CONTROL_WS_OPTIONAL_RESULT_TIMEOUT_SECONDS,
+        )
+        for frame_index in range(1, 6):
+            try:
+                opcode, payload = _recv_control_ws_frame(upstream.sock, frame_buffer)
+            except TimeoutError:
+                if not pulse_sent:
+                    _send_control_ws_text_frame(upstream.sock, CONTROL_WS_PULSE_TEXT)
+                    pulse_sent = True
+                    upstream.sock.settimeout(CONTROL_WS_PULSE_RESULT_TIMEOUT_SECONDS)
+                    logger.info(
+                        (
+                            "查询窗口前控制WS发送心跳: url=%s, payload=%s, "
+                            "wait_timeout=%ss, elapsed=%ss"
+                        ),
+                        ws_url,
+                        CONTROL_WS_PULSE_TEXT,
+                        CONTROL_WS_PULSE_RESULT_TIMEOUT_SECONDS,
+                        _elapsed_seconds(started),
+                    )
+                    continue
+
+                result = _control_ws_handshake_only_result("idle_timeout_after_pulse")
+                logger.warning(
+                    (
+                        "查询窗口前控制WS握手和心跳后未返回JSON结果，按握手成功继续查询窗口: "
+                        "url=%s, protocol=%s, elapsed=%ss, frames=%d"
+                    ),
+                    ws_url,
+                    _control_protocol_summary(protocol),
+                    _elapsed_seconds(started),
+                    frame_count,
+                )
+                return result
+
+            frame_count = frame_index
+            logger.info(
+                (
+                    "查询窗口前控制WS收到帧: url=%s, frame=%d, opcode=%s, "
+                    "payload_bytes=%d, elapsed=%ss, sample=%s"
+                ),
+                ws_url,
+                frame_index,
+                _control_ws_opcode_name(opcode),
+                len(payload),
+                _elapsed_seconds(started),
+                _control_ws_payload_sample(opcode, payload),
+            )
+            if opcode in (0x1, 0x2):
+                result = _parse_control_ws_result_or_pulse(payload)
+                if result is None:
+                    continue
+                if not is_success_response(result):
+                    raise OSError(
+                        "display wall control websocket returned "
+                        f"{_control_ws_result_summary(result)}"
+                    )
+                logger.info(
+                    "查询窗口前控制WS结果成功: url=%s, result=%s, elapsed=%ss",
+                    ws_url,
+                    _control_ws_result_summary(result),
+                    _elapsed_seconds(started),
+                )
+                return result
+            if opcode == 0x8:
+                raise OSError("display wall control websocket closed before result")
+            if opcode == 0x9:
+                _send_control_ws_client_frame(upstream.sock, 0xA, payload)
+                continue
+            if opcode == 0xA:
+                continue
+
+        result = _control_ws_handshake_only_result("non_result_frames")
+        logger.warning(
+            "查询窗口前控制WS未返回结果帧，按握手成功继续查询窗口: url=%s, frames=%d, elapsed=%ss",
+            ws_url,
+            frame_count,
+            _elapsed_seconds(started),
+        )
+        return result
+    except TimeoutError:
+        result = _control_ws_handshake_only_result("idle_timeout")
+        logger.warning(
+            (
+                "查询窗口前控制WS握手后未返回结果帧，按握手成功继续查询窗口: "
+                "url=%s, protocol=%s, elapsed=%ss, frames=%d"
+            ),
+            ws_url,
+            _control_protocol_summary(protocol),
+            _elapsed_seconds(started),
+            frame_count,
+        )
+        return result
+    finally:
+        try:
+            upstream.sock.close()
+        except OSError:
+            pass
+
+
+def _open_display_wall_control_ws(ws_url: str, protocol: str = "") -> ControlWebSocket:
+    parsed = urlparse(ws_url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    if not host:
+        raise OSError(f"invalid websocket url: {ws_url}")
+    if parsed.scheme == "wss":
+        raise OSError("wss display wall control websocket is not supported")
+
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = "\r\n".join(
+        _control_ws_handshake_headers(path, host, port, key, protocol)
+    ) + "\r\n\r\n"
+
+    started = time.monotonic()
+    logger.info(
+        (
+            "查询窗口前控制WS握手开始: url=%s, origin=%s, protocol=%s, "
+            "extensions=yes, tcp_timeout=%ss, handshake_timeout=%ss"
+        ),
+        ws_url,
+        API_BASE_URL,
+        _control_protocol_summary(protocol),
+        CONTROL_WS_TCP_CONNECT_TIMEOUT_SECONDS,
+        CONTROL_WS_HANDSHAKE_TIMEOUT_SECONDS,
+    )
+    try:
+        sock = socket.create_connection(
+            (host, port),
+            timeout=CONTROL_WS_TCP_CONNECT_TIMEOUT_SECONDS,
+        )
+    except OSError as exc:
+        raise OSError(
+            f"display wall control websocket tcp connect failed after "
+            f"{_elapsed_seconds(started)}s: {exc}"
+        ) from exc
+
+    try:
+        logger.info(
+            "查询窗口前控制WS TCP已连接: url=%s, elapsed=%ss",
+            ws_url,
+            _elapsed_seconds(started),
+        )
+        sock.settimeout(CONTROL_WS_HANDSHAKE_TIMEOUT_SECONDS)
+        sock.sendall(request.encode("ascii"))
+        response, initial_data = _recv_control_http_headers(sock)
+        first_line = response.splitlines()[0] if response else ""
+        parsed_headers = _parse_control_http_headers(response)
+        elapsed = _elapsed_seconds(started)
+        if " 101 " not in f" {first_line} ":
+            logger.warning(
+                (
+                    "查询窗口前控制WS握手拒绝: url=%s, first_line=%s, "
+                    "elapsed=%ss, headers=%s, initial_bytes=%d"
+                ),
+                ws_url,
+                first_line[:160] or "-",
+                elapsed,
+                _control_headers_summary(parsed_headers),
+                len(initial_data),
+            )
+            raise OSError(f"display wall control websocket handshake rejected: {first_line[:160]}")
+
+        logger.info(
+            (
+                "查询窗口前控制WS握手成功: url=%s, first_line=%s, "
+                "elapsed=%ss, headers=%s, initial_bytes=%d"
+            ),
+            ws_url,
+            first_line[:160],
+            elapsed,
+            _control_headers_summary(parsed_headers),
+            len(initial_data),
+        )
+        sock.settimeout(None)
+        return ControlWebSocket(
+            sock=sock,
+            initial_data=initial_data,
+            first_line=first_line[:160],
+            handshake_elapsed=elapsed,
+        )
+    except Exception:
+        sock.close()
+        raise
+
+
+def _control_ws_handshake_headers(
+    path: str,
+    host: str,
+    port: int,
+    key: str,
+    protocol: str = "",
+) -> List[str]:
+    headers = [
+        f"GET {path} HTTP/1.1",
+        "Accept-Encoding: gzip, deflate",
+        "Accept-Language: zh-CN,zh;q=0.9",
+        "Cache-Control: no-cache",
+        "Connection: Upgrade",
+        f"Host: {host}:{port}",
+        f"Origin: {API_BASE_URL}",
+        "Pragma: no-cache",
+        f"Sec-WebSocket-Extensions: {CONTROL_WS_EXTENSIONS}",
+        f"Sec-WebSocket-Key: {key}",
+    ]
+    if protocol:
+        headers.append(f"Sec-WebSocket-Protocol: {protocol}")
+    headers.extend([
+        "Sec-WebSocket-Version: 13",
+        "Upgrade: websocket",
+        f"User-Agent: {CONTROL_WS_USER_AGENT}",
+    ])
+    return headers
+
+
+def _recv_control_http_headers(sock: socket.socket) -> Tuple[str, bytes]:
+    chunks = []
+    total = 0
+    while total < 8192:
+        chunk = sock.recv(1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if b"\r\n\r\n" in b"".join(chunks):
+            break
+    data = b"".join(chunks)
+    header_bytes, separator, initial_data = data.partition(b"\r\n\r\n")
+    if separator:
+        header_bytes += separator
+    return header_bytes.decode("iso-8859-1", errors="replace"), initial_data
+
+
+def _parse_control_http_headers(response: str) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    for line in response.splitlines()[1:]:
+        if ":" not in line:
+            continue
+        name, value = line.split(":", 1)
+        headers[name.strip().lower()] = value.strip()
+    return headers
+
+
+def _recv_control_ws_frame(
+    sock: socket.socket,
+    initial_data: bytearray,
+) -> Tuple[int, bytes]:
+    header = _recv_control_buffered(sock, initial_data, 2)
+    first_byte, second_byte = header[0], header[1]
+    opcode = first_byte & 0x0F
+    length = second_byte & 0x7F
+    masked = bool(second_byte & 0x80)
+    if length == 126:
+        length = int.from_bytes(_recv_control_buffered(sock, initial_data, 2), "big")
+    elif length == 127:
+        length = int.from_bytes(_recv_control_buffered(sock, initial_data, 8), "big")
+
+    mask = _recv_control_buffered(sock, initial_data, 4) if masked else b""
+    payload = bytearray(_recv_control_buffered(sock, initial_data, length))
+    if masked:
+        for index, value in enumerate(payload):
+            payload[index] = value ^ mask[index % 4]
+    return opcode, bytes(payload)
+
+
+def _recv_control_buffered(sock: socket.socket, buffer: bytearray, length: int) -> bytes:
+    while len(buffer) < length:
+        chunk = sock.recv(max(1024, length - len(buffer)))
+        if not chunk:
+            raise OSError("display wall control websocket connection closed")
+        buffer.extend(chunk)
+
+    data = bytes(buffer[:length])
+    del buffer[:length]
+    return data
+
+
+def _send_control_ws_text_frame(sock: socket.socket, text: str) -> None:
+    _send_control_ws_client_frame(sock, 0x1, text.encode("utf-8"))
+
+
+def _send_control_ws_client_frame(sock: socket.socket, opcode: int, payload: bytes) -> None:
+    first_byte = 0x80 | (opcode & 0x0F)
+    length = len(payload)
+    if length < 126:
+        header = bytes([first_byte, 0x80 | length])
+    elif length < 65536:
+        header = bytes([first_byte, 0x80 | 126]) + length.to_bytes(2, "big")
+    else:
+        header = bytes([first_byte, 0x80 | 127]) + length.to_bytes(8, "big")
+
+    mask = os.urandom(4)
+    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+    sock.sendall(header + mask + masked)
+
+
+def _parse_control_ws_result_or_pulse(payload: bytes) -> Optional[Dict[str, Any]]:
+    text = payload.decode("utf-8", errors="replace").strip()
+    if text == CONTROL_WS_PULSE_TEXT:
+        logger.info("查询窗口前控制WS收到心跳: payload=%s", text)
+        return None
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise OSError(f"display wall control websocket returned non-json: {text[:160]}") from exc
+    if not isinstance(result, dict):
+        raise OSError(f"display wall control websocket returned non-object json: {text[:160]}")
+    return result
+
+
+def _control_ws_handshake_only_result(reason: str) -> Dict[str, Any]:
+    return {
+        "result": "success",
+        "result_val": 0,
+        "control_ws_mode": "handshake_only",
+        "reason": reason,
+    }
+
+
+def _control_ws_result_summary(result: Dict[str, Any]) -> str:
+    return ", ".join(
+        f"{key}={result.get(key)}"
+        for key in ("result", "result_val", "handle", "control_ws_mode", "reason")
+        if key in result
+    ) or str(result)[:160]
+
+
+def _control_protocol_summary(protocol: str) -> str:
+    value = str(protocol or "").strip()
+    if not value:
+        return "no"
+    digest = hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:8]
+    return f"yes(len={len(value)},sha1={digest})"
+
+
+def _control_headers_summary(headers: Dict[str, str]) -> str:
+    parts = [
+        f"protocol={_control_protocol_summary(headers.get('sec-websocket-protocol', ''))}",
+        "extensions=yes" if headers.get("sec-websocket-extensions") else "extensions=no",
+    ]
+    for key in ("server", "keep-alive"):
+        value = headers.get(key)
+        if value:
+            parts.append(f"{key}={value[:80]}")
+    return ", ".join(parts)
+
+
+def _control_ws_opcode_name(opcode: int) -> str:
+    names = {
+        0x0: "continuation",
+        0x1: "text",
+        0x2: "binary",
+        0x8: "close",
+        0x9: "ping",
+        0xA: "pong",
+    }
+    return f"{names.get(opcode, 'unknown')}({opcode})"
+
+
+def _control_ws_payload_sample(opcode: int, payload: bytes) -> str:
+    if not payload:
+        return "-"
+    if opcode == 0x1:
+        return payload.decode("utf-8", errors="replace").strip()[:160]
+    return payload[:32].hex()
+
+
+def _elapsed_seconds(started: float) -> str:
+    return f"{time.monotonic() - started:.2f}"
 
 
 def _stream_channel(mac: str) -> str:

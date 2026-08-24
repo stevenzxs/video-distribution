@@ -381,6 +381,8 @@ class APIClient:
     def get_display_wall_wnds(self, display_wall: str) -> Dict[str, Any]:
         """获取大屏所有窗口信息"""
         data = {"display_wall": display_wall}
+        if self.token:
+            data["token"] = self.token
         return self._make_request("/mvapi/v1/wnd/GetDisplayWallWnds", data)
 
     def open_wnd(self, display_wall: str, src_mac: str,

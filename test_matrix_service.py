@@ -1,5 +1,6 @@
 import pytest
 
+import matrix_service as matrix_service_module
 from api_client import APIClient, is_success_response
 from config import MATRIX_CONFIG
 from matrix_service import (
@@ -23,6 +24,18 @@ class CapturingAPIClient(APIClient):
         return {"result": "success", "result_val": 0}
 
 
+@pytest.fixture(autouse=True)
+def control_ws_calls(monkeypatch):
+    calls = []
+
+    def fake_call(ws_url, protocol=""):
+        calls.append({"ws_url": ws_url, "protocol": protocol})
+        return {"result": "success", "result_val": 0}
+
+    monkeypatch.setattr(matrix_service_module, "_call_display_wall_control_ws", fake_call)
+    return calls
+
+
 class FakeAPIClient:
     def __init__(
         self,
@@ -31,8 +44,11 @@ class FakeAPIClient:
         bind_result=None,
         windows=None,
         record_opened_window=True,
+        display_wall_wnds_result=None,
+        replace_result=None,
     ):
         self.opened_windows = []
+        self.replaced_windows = []
         self.closed_windows = []
         self.created_walls = []
         self.bind_calls = []
@@ -41,7 +57,9 @@ class FakeAPIClient:
         self.token = None
         self.next_handle = 1001
         self.bind_result = bind_result or {"result": "success", "result_val": 0}
+        self.replace_result = replace_result
         self.record_opened_window = record_opened_window
+        self.display_wall_wnds_result = display_wall_wnds_result
         self.windows = list(windows or [])
         self.display_walls = display_walls
         if self.display_walls is None:
@@ -244,6 +262,8 @@ class FakeAPIClient:
 
     def get_display_wall_wnds(self, display_wall):
         self.get_display_wall_wnds_calls.append(display_wall)
+        if self.display_wall_wnds_result is not None:
+            return self.display_wall_wnds_result
         return {
             "result": "success",
             "result_val": 0,
@@ -283,6 +303,21 @@ class FakeAPIClient:
             if window.get("handle") != handle
         ]
         return {"result": "success", "result_val": 0}
+
+    def replace_wnd_source(self, display_wall, handle, src_mac):
+        payload = {
+            "display_wall": display_wall,
+            "handle": handle,
+            "src_mac": src_mac,
+        }
+        self.replaced_windows.append(payload)
+        if self.replace_result is not None:
+            return self.replace_result
+        for window in self.windows:
+            if window.get("handle") == handle:
+                window["src_mac"] = src_mac
+                break
+        return {"result": "success", "result_val": 0, "handle": handle}
 
 
 def test_api_success_uses_platform_success_shape():
@@ -373,11 +408,22 @@ def test_bind_decoder_payload_matches_platform_shape():
 
 def test_display_wall_wnds_payload_uses_display_wall_field():
     client = CapturingAPIClient()
+    client.token = "body-token"
 
     client.get_display_wall_wnds("VW3")
 
     assert client.last_endpoint == "/mvapi/v1/wnd/GetDisplayWallWnds"
-    assert client.last_data == {"display_wall": "VW3"}
+    assert client.last_data == {"display_wall": "VW3", "token": "body-token"}
+
+
+def test_other_api_payloads_do_not_add_token_to_body():
+    client = CapturingAPIClient()
+    client.token = "header-only-token"
+
+    client.get_display_wall_info("VW3")
+
+    assert client.last_endpoint == "/mvapi/v1/displaywall/GetDisplayWallInfo"
+    assert client.last_data == {"name": "VW3"}
 
 
 def test_parse_matrix_command():
@@ -463,8 +509,9 @@ def test_scheduler_opens_expected_output_window_from_display_wall_list():
     assert fake.display_wall_info_calls == []
     assert fake.display_wall_decoder_list_calls == []
     assert fake.open_display_wall_calls == []
-    assert fake.get_display_wall_wnds_calls == []
+    assert fake.get_display_wall_wnds_calls == ["显示器2"]
     assert fake.closed_windows == []
+    assert fake.replaced_windows == []
     assert fake.bind_calls == []
     assert fake.created_walls == []
     assert route["stream"]["open_header"]["c"] == "00-40-01-2b-05-27-00-01/v3"
@@ -475,6 +522,72 @@ def test_scheduler_opens_expected_output_window_from_display_wall_list():
     assert route["stream"]["ws_proxy_path"] == "/api/preview/ws?output=2"
     assert route["stream"]["control_ws_protocol"] == "fake-token"
     assert route["stream"]["ws_protocol"] == ""
+
+
+def test_scheduler_calls_control_ws_before_display_wall_wnds(monkeypatch):
+    order = []
+
+    def fake_control_ws(ws_url, protocol=""):
+        order.append(("control_ws", ws_url, protocol))
+        return {"result": "success", "result_val": 0}
+
+    class OrderedFakeAPIClient(FakeAPIClient):
+        def get_display_wall_wnds(self, display_wall):
+            order.append(("get_wnds", display_wall))
+            return super().get_display_wall_wnds(display_wall)
+
+    monkeypatch.setattr(
+        matrix_service_module,
+        "_call_display_wall_control_ws",
+        fake_control_ws,
+    )
+    fake = OrderedFakeAPIClient()
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    scheduler.switch_command("1v2.")
+
+    assert order[:2] == [
+        (
+            "control_ws",
+            "ws://192.168.130.101:8001/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A82",
+            "fake-token",
+        ),
+        ("get_wnds", "显示器2"),
+    ]
+
+
+def test_scheduler_continues_when_control_ws_probe_fails(monkeypatch):
+    def fake_control_ws(ws_url, protocol=""):
+        raise OSError("control websocket unavailable")
+
+    monkeypatch.setattr(
+        matrix_service_module,
+        "_call_display_wall_control_ws",
+        fake_control_ws,
+    )
+    fake = FakeAPIClient()
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    route = scheduler.switch_command("1v1.")
+
+    assert fake.get_display_wall_wnds_calls == ["显示器1"]
+    assert fake.opened_windows == [
+        {
+            "display_wall": "显示器1",
+            "src_mac": "00-40-01-2b-05-27",
+            "pos_x": 0,
+            "pos_y": 0,
+            "width": 1920,
+            "height": 1080,
+        }
+    ]
+    assert route["window"]["result"]["handle"] == 1001
 
 
 def test_scheduler_reuses_login_for_consecutive_switches():
@@ -499,9 +612,163 @@ def test_scheduler_reuses_login_for_consecutive_switches():
             "pos_y": 0,
             "width": 1920,
             "height": 1080,
-        },
+        }
+    ]
+    assert fake.replaced_windows == [
         {
             "display_wall": "显示器2",
+            "handle": 1001,
+            "src_mac": "00-40-01-2b-05-28",
+        },
+    ]
+    assert fake.closed_windows == []
+
+
+def test_scheduler_replaces_existing_output_window_source():
+    fake = FakeAPIClient(windows=[
+        {
+            "handle": 2048,
+            "src_mac": "00-40-01-2b-05-99",
+            "src_name": "旧输入",
+            "src_status": 1,
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080,
+        }
+    ])
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    route = scheduler.switch_command("1v1.")
+
+    assert fake.get_display_wall_wnds_calls == ["显示器1"]
+    assert fake.opened_windows == []
+    assert fake.replaced_windows == [
+        {
+            "display_wall": "显示器1",
+            "handle": 2048,
+            "src_mac": "00-40-01-2b-05-27",
+        }
+    ]
+    assert route["window"]["result"]["replaced"] is True
+    assert route["window"]["result"]["handle"] == 2048
+    assert route["window"]["verified_windows"] == [
+        {
+            "handle": 2048,
+            "src_mac": "00-40-01-2b-05-27",
+            "src_name": "旧输入",
+            "src_status": 1,
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080,
+            "layer": None,
+        }
+    ]
+
+
+@pytest.mark.parametrize("wnds_result", [
+    {"result": "resource not exist", "result_val": 13},
+    {"result": "failed", "result_val": 500, "message": "temporary failure"},
+])
+def test_scheduler_opens_window_when_display_wall_wnds_probe_fails(wnds_result):
+    fake = FakeAPIClient(display_wall_wnds_result=wnds_result)
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    route = scheduler.switch_command("1v1.")
+
+    assert fake.get_display_wall_wnds_calls == ["显示器1"]
+    assert fake.opened_windows == [
+        {
+            "display_wall": "显示器1",
+            "src_mac": "00-40-01-2b-05-27",
+            "pos_x": 0,
+            "pos_y": 0,
+            "width": 1920,
+            "height": 1080,
+        }
+    ]
+    assert fake.replaced_windows == []
+    assert route["window"]["result"] == {
+        "result": "success",
+        "result_val": 0,
+        "handle": 1001,
+    }
+
+
+def test_scheduler_uses_cached_open_handle_when_wnds_probe_keeps_failing():
+    fake = FakeAPIClient(
+        display_wall_wnds_result={"result": "resource not exist", "result_val": 13},
+    )
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    first_route = scheduler.switch_command("1v1.")
+    second_route = scheduler.switch_command("2v1.")
+
+    assert first_route["window"]["result"]["handle"] == 1001
+    assert fake.get_display_wall_wnds_calls == ["显示器1", "显示器1"]
+    assert fake.opened_windows == [
+        {
+            "display_wall": "显示器1",
+            "src_mac": "00-40-01-2b-05-27",
+            "pos_x": 0,
+            "pos_y": 0,
+            "width": 1920,
+            "height": 1080,
+        }
+    ]
+    assert fake.replaced_windows == [
+        {
+            "display_wall": "显示器1",
+            "handle": 1001,
+            "src_mac": "00-40-01-2b-05-28",
+        }
+    ]
+    assert second_route["window"]["result"]["replaced"] is True
+    assert second_route["window"]["result"]["handle"] == 1001
+
+
+def test_scheduler_falls_back_to_open_wnd_when_cached_handle_is_stale():
+    fake = FakeAPIClient(
+        display_wall_wnds_result={"result": "resource not exist", "result_val": 13},
+        replace_result={"result": "resource not exist", "result_val": 13},
+    )
+    scheduler = MatrixScheduler(
+        client_factory=lambda: fake,
+        runtime_state=MatrixRuntimeState(),
+    )
+
+    first_route = scheduler.switch_command("1v1.")
+    second_route = scheduler.switch_command("2v1.")
+
+    assert first_route["window"]["result"]["handle"] == 1001
+    assert fake.replaced_windows == [
+        {
+            "display_wall": "显示器1",
+            "handle": 1001,
+            "src_mac": "00-40-01-2b-05-28",
+        }
+    ]
+    assert fake.opened_windows == [
+        {
+            "display_wall": "显示器1",
+            "src_mac": "00-40-01-2b-05-27",
+            "pos_x": 0,
+            "pos_y": 0,
+            "width": 1920,
+            "height": 1080,
+        },
+        {
+            "display_wall": "显示器1",
             "src_mac": "00-40-01-2b-05-28",
             "pos_x": 0,
             "pos_y": 0,
@@ -509,7 +776,7 @@ def test_scheduler_reuses_login_for_consecutive_switches():
             "height": 1080,
         },
     ]
-    assert fake.closed_windows == []
+    assert second_route["window"]["result"]["handle"] == 1002
 
 
 def test_scheduler_uses_display_wall_resolution_for_open_wnd():

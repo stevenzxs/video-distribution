@@ -94,6 +94,26 @@ button {
   height: 100%;
 }
 
+.screen:fullscreen,
+.screen:-webkit-full-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100vw;
+  height: 100vh;
+  aspect-ratio: auto;
+  background: #000000;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.screen:fullscreen canvas,
+.screen:-webkit-full-screen canvas {
+  width: min(100vw, calc(100vh * 16 / 9));
+  height: min(100vh, calc(100vw * 9 / 16));
+}
+
 .screen-meta {
   position: absolute;
   inset: 0;
@@ -110,6 +130,14 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
+}
+
+.screen-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -130,6 +158,26 @@ button {
 
 .stream-state {
   color: #b7f3df;
+}
+
+.fullscreen-button {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: #f7fafc;
+  background: rgba(16, 20, 25, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.fullscreen-button:hover {
+  background: rgba(16, 20, 25, 0.9);
+  border-color: rgba(255, 255, 255, 0.34);
 }
 
 .screen-center {
@@ -155,6 +203,38 @@ button {
   display: block;
   overflow-wrap: anywhere;
   font-size: 13px;
+}
+
+.screen.preview-playing .screen-center,
+.screen.preview-playing .screen-bottomline {
+  opacity: 0;
+}
+
+.screen.preview-playing .screen-meta {
+  padding: 10px;
+}
+
+.screen.preview-playing .screen-label,
+.screen.preview-playing .stream-state,
+.screen.preview-playing .fullscreen-button {
+  background: rgba(16, 20, 25, 0.46);
+}
+
+.screen:fullscreen.preview-playing .screen-label,
+.screen:-webkit-full-screen.preview-playing .screen-label {
+  opacity: 0;
+}
+
+.screen:fullscreen .screen-meta,
+.screen:-webkit-full-screen .screen-meta {
+  padding: 18px;
+}
+
+.screen:fullscreen .fullscreen-button,
+.screen:-webkit-full-screen .fullscreen-button {
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
 }
 
 .matrix-band {

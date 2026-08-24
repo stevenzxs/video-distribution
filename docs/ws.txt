@@ -3,6 +3,7 @@ ws://192.168.130.101:8001/?display_wall=%E6%98%BE%E7%A4%BA%E5%99%A81
 请求方法
 GET
 状态代码
+101 Switching Protocol
 
 access-control-allow-credentials
 true
@@ -11,15 +12,16 @@ http://192.168.130.101:8001
 connection
 Upgrade
 date
-Tue, Jan 06 1970 08:07:37 GMT
+Thu, Jan 01 1970 01:26:37 GMT
 keep-alive
 timeout=15, max=100
 sec-websocket-accept
-kPMGOcG8T/m0udQhbRE6kzuTqRg=
+f15sUUWJzjNKisCfwy7CVSKFNAw=
 sec-websocket-protocol
-<登录token>
+eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjc0NzAsImlzcyI6ImFkbWluIiwianRpIjoiYzZiNGM3YjEtMTIyZS00Yjk3LTllZmMtY2FiOTBlNTY5MGM5IiwibmJmIjozODcwfQ.830j6u7Som0o4ibILsvOPwY_jcBuUorQKlbhaeLDHsI
 server
 build in Jan 7 2026 17:49:07
+
 upgrade
 websocket
 
@@ -41,12 +43,30 @@ no-cache
 sec-websocket-extensions
 permessage-deflate; client_max_window_bits
 sec-websocket-key
-emA7c8KRVaDbk6Zt3Z10sg==
+5jMjpi/aRDzdoU10lt5zXQ==
 sec-websocket-protocol
-<登录token>
+eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjc0NzAsImlzcyI6ImFkbWluIiwianRpIjoiYzZiNGM3YjEtMTIyZS00Yjk3LTllZmMtY2FiOTBlNTY5MGM5IiwibmJmIjozODcwfQ.830j6u7Som0o4ibILsvOPwY_jcBuUorQKlbhaeLDHsI
 sec-websocket-version
 13
 upgrade
 websocket
 user-agent
 Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36
+
+
+交互信息
+{"result": "success", "result_val": 0}	38	
+12:04:39.841
+pulse	5	
+12:04:40.840
+{"result": "success", "result_val": 0}	38	
+12:04:40.842
+pulse	5	
+12:04:42.052
+{"result": "success", "result_val": 0}	38	
+12:04:42.055
+pulse	5	
+12:04:43.240
+{"result": "success", "result_val": 0}	38	
+12:04:43.242
+pulse
