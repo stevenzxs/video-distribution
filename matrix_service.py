@@ -399,10 +399,75 @@ class MatrixScheduler:
         pos_x = 0
         pos_y = 0
 
+        logger.info(
+            "开窗: display_wall=%s, src_mac=%s, pos=(%d,%d), size=%dx%d",
+            display_wall,
+            src_mac,
+            pos_x,
+            pos_y,
+            width,
+            height,
+        )
+        result = client.open_wnd(
+            display_wall=display_wall,
+            src_mac=src_mac,
+            pos_x=pos_x,
+            pos_y=pos_y,
+            width=width,
+            height=height,
+        )
+        if is_success_response(result):
+            logger.info("开窗结果: %s", _summarize_api_result(result))
+            return {
+                "pos_x": pos_x,
+                "pos_y": pos_y,
+                "width": width,
+                "height": height,
+                "result": result,
+            }
+
+        logger.warning(
+            "开窗失败，尝试替换已有窗口信号源: display_wall=%s, src_mac=%s, error=%s",
+            display_wall,
+            src_mac,
+            format_api_error(result),
+        )
+        replaced = self._replace_output_window_source_after_open_failure(
+            client,
+            display_wall,
+            output_index,
+            src_mac,
+            pos_x,
+            pos_y,
+            width,
+            height,
+            open_result=result,
+        )
+        if replaced:
+            return replaced
+
+        raise MatrixError(
+            f"开窗失败 {format_api_error(result)}，且替换已有窗口信号源未成功；命令位置为"
+            f"({pos_x}, {pos_y}, {width}, {height})",
+            502,
+        )
+
+    def _replace_output_window_source_after_open_failure(
+        self,
+        client: APIClient,
+        display_wall: str,
+        output_index: int,
+        src_mac: str,
+        pos_x: int,
+        pos_y: int,
+        width: int,
+        height: int,
+        open_result: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
         existing_windows = self._get_display_wall_windows(client, display_wall)
         replaceable_window = _first_replaceable_window(existing_windows)
         if replaceable_window:
-            return self._replace_output_window_source(
+            replaced = self._replace_output_window_source(
                 client,
                 display_wall,
                 output_index,
@@ -412,9 +477,12 @@ class MatrixScheduler:
                 pos_y,
                 width,
                 height,
-                window_source="接口窗口列表",
-                allow_fallback=False,
+                window_source="开窗失败后的接口窗口列表",
+                allow_fallback=True,
             )
+            if replaced:
+                replaced["open_result"] = open_result
+                return replaced
 
         cached_window = self._cached_output_window(
             output_index,
@@ -435,44 +503,14 @@ class MatrixScheduler:
                 pos_y,
                 width,
                 height,
-                window_source="本地缓存",
+                window_source="开窗失败后的本地缓存",
                 allow_fallback=True,
             )
             if replaced:
+                replaced["open_result"] = open_result
                 return replaced
 
-        logger.info(
-            "开窗: display_wall=%s, src_mac=%s, pos=(%d,%d), size=%dx%d",
-            display_wall,
-            src_mac,
-            pos_x,
-            pos_y,
-            width,
-            height,
-        )
-        result = client.open_wnd(
-            display_wall=display_wall,
-            src_mac=src_mac,
-            pos_x=pos_x,
-            pos_y=pos_y,
-            width=width,
-            height=height,
-        )
-        if not is_success_response(result):
-            raise MatrixError(
-                f"开窗失败 {format_api_error(result)}，命令位置为"
-                f"({pos_x}, {pos_y}, {width}, {height})",
-                502,
-            )
-
-        logger.info("开窗结果: %s", _summarize_api_result(result))
-        return {
-            "pos_x": pos_x,
-            "pos_y": pos_y,
-            "width": width,
-            "height": height,
-            "result": result,
-        }
+        return None
 
     def _replace_output_window_source(
         self,
@@ -509,7 +547,7 @@ class MatrixScheduler:
         if not is_success_response(result):
             if allow_fallback:
                 logger.warning(
-                    "输出%d使用%s窗口替换信号源失败，回退开窗: display_wall=%s, "
+                    "输出%d使用%s窗口替换信号源失败: display_wall=%s, "
                     "handle=%s, new_src_mac=%s, error=%s",
                     output_index,
                     window_source,
